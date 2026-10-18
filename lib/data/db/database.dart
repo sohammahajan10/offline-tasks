@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 
+import '../../domain/fractional_index.dart';
 import 'database.steps.dart';
 
 part 'database.g.dart';
@@ -31,6 +32,16 @@ class Tasks extends Table {
   /// Wire JSON of the last server state this row was reconciled with: the
   /// common ancestor for the three-way field merge. Null until first synced.
   TextColumn get serverSnapshot => text().nullable()();
+
+  /// Manual order: a fractional index key (see FractionalIndex). Ties are
+  /// broken by id.
+  TextColumn get sortKey => text().withDefault(const Constant(''))();
+
+  /// 'daily' | 'weekly' | 'monthly', or null for a one-off task.
+  TextColumn get recurrence => text().nullable()();
+
+  /// Id shared by every occurrence of a recurring task (the first one's id).
+  TextColumn get seriesId => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -113,7 +124,7 @@ class AppDatabase extends _$AppDatabase {
   // add the `fromNToM` step below and fill in the generated data test in
   // test/drift/. Never edit an old step: devices may already have run it.
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -144,6 +155,25 @@ class AppDatabase extends _$AppDatabase {
         await m.addColumn(schema.tasks, schema.tasks.serverSnapshot);
         await m.createTable(schema.syncLog);
         await m.createTable(schema.syncState);
+      },
+      // v4: manual order and recurring tasks. Existing rows get order keys
+      // a0, a1, … by id, the same formula the server migration uses, so a
+      // device's synced tasks get the keys the server assigns.
+      from3To4: (m, schema) async {
+        await m.addColumn(schema.tasks, schema.tasks.sortKey);
+        await m.addColumn(schema.tasks, schema.tasks.recurrence);
+        await m.addColumn(schema.tasks, schema.tasks.seriesId);
+        final ids = await customSelect('SELECT id FROM tasks ORDER BY id')
+            .map((r) => r.read<String>('id'))
+            .get();
+        String? key;
+        for (final id in ids) {
+          key = FractionalIndex.keyBetween(key, null);
+          await customUpdate(
+            'UPDATE tasks SET sort_key = ? WHERE id = ?',
+            variables: [Variable(key), Variable(id)],
+          );
+        }
       },
     ),
     beforeOpen: (details) async {

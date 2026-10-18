@@ -5,6 +5,8 @@ import '../data/api/auth_repository.dart';
 import '../data/api/supabase_config.dart';
 import '../data/api/supabase_remote_api.dart';
 import '../data/db/database.dart';
+import '../data/notifications/local_notifications_gateway.dart';
+import '../data/notifications/reminders.dart';
 import '../data/sync/background_sync.dart';
 import '../data/sync/connectivity_monitor.dart';
 import '../data/sync/sync_coordinator.dart';
@@ -144,6 +146,26 @@ final syncLogProvider = StreamProvider<List<SyncLogEntry>>(
 final queueProvider = StreamProvider<List<QueuedChange>>(
   (ref) => ref.watch(syncLogRepositoryProvider).watchQueue(),
 );
+
+// -------------------------------------------------------------- reminders
+
+/// Null in widget tests (no platform plugin).
+final notificationsProvider = Provider<LocalNotificationsGateway?>(
+  (ref) => LocalNotificationsGateway.instance,
+);
+
+/// Reschedules deadline reminders whenever the tasks change, whether by a
+/// local edit or a pull from the server.
+final reminderSyncProvider = Provider<ReminderSync?>((ref) {
+  final gateway = ref.watch(notificationsProvider);
+  if (gateway == null) return null;
+  final sync = ReminderSync(
+    ReminderReconciler(gateway),
+    ref.watch(taskRepositoryProvider).watchTasks(const TaskQuery()),
+  );
+  ref.onDispose(sync.dispose);
+  return sync;
+});
 
 // ------------------------------------------------------------------ tasks
 

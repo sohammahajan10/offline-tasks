@@ -4,7 +4,11 @@ import 'package:workmanager/workmanager.dart';
 
 import '../api/supabase_config.dart';
 import '../api/supabase_remote_api.dart';
+import '../../domain/task_query.dart';
+import '../../domain/task_repository.dart';
 import '../db/database.dart';
+import '../notifications/local_notifications_gateway.dart';
+import '../notifications/reminders.dart';
 import 'sync_engine.dart';
 
 const _syncTask = 'offline_tasks.sync';
@@ -29,6 +33,15 @@ void backgroundSyncDispatcher() {
       final api = SupabaseRemoteApi(Supabase.instance.client);
       final report = await SyncEngine(db, api).sync();
       debugPrint('Background sync ($task): $report');
+      // A pull may have moved, completed or deleted tasks: update reminders.
+      // (Also runs after a reboot, via the periodic job.)
+      final gateway = LocalNotificationsGateway.instance;
+      await gateway.initialize();
+      final tasks = await TaskRepository(db)
+          .watchTasks(const TaskQuery())
+          .first;
+      final changed = await ReminderReconciler(gateway).reconcile(tasks);
+      debugPrint('Background reminders: $changed');
       // false asks WorkManager to retry this run later with its own backoff;
       // a skipped run (signed out, lease held by the app) is not a failure.
       return report.error == null;

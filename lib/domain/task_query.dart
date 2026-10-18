@@ -12,6 +12,9 @@ enum StatusFilter {
 enum TaskSort {
   /// Open tasks first, then by due date, priority and last edit.
   smart('Smart'),
+
+  /// Your own order; drag to rearrange.
+  manual('Manual (drag)'),
   dueDate('Due date'),
   priority('Priority'),
   recent('Recently edited');

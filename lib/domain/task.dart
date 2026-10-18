@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'recurrence.dart';
+
 enum Priority {
   low('Low'),
   medium('Medium'),
@@ -24,6 +26,9 @@ class TaskItem {
     this.version = 0,
     required this.updatedAt,
     this.dirty = false,
+    this.sortKey = '',
+    this.recurrence,
+    this.seriesId,
   });
 
   final String id;
@@ -40,6 +45,13 @@ class TaskItem {
 
   /// Has local changes the server has not acknowledged yet.
   final bool dirty;
+
+  /// Manual order key (fractional index).
+  final String sortKey;
+  final Recurrence? recurrence;
+
+  /// Shared by all occurrences of a recurring task.
+  final String? seriesId;
 
   bool get isOverdue =>
       !completed && dueAt != null && dueAt!.isBefore(DateTime.now());
@@ -58,6 +70,8 @@ class TaskPatch {
     this.clearCategory = false,
     this.tags,
     this.completed,
+    this.recurrence,
+    this.clearRecurrence = false,
   });
 
   final String? title;
@@ -69,6 +83,8 @@ class TaskPatch {
   final bool clearCategory;
   final List<String>? tags;
   final bool? completed;
+  final Recurrence? recurrence;
+  final bool clearRecurrence;
 }
 
 /// Field names of the synced task fields, in the server's JSON shape.
@@ -81,6 +97,9 @@ abstract final class TaskFields {
   static const tags = 'tags';
   static const completed = 'completed';
   static const isDeleted = 'is_deleted';
+  static const sortKey = 'sort_key';
+  static const recurrence = 'recurrence';
+  static const seriesId = 'series_id';
 
   static const all = [
     title,
@@ -91,6 +110,9 @@ abstract final class TaskFields {
     tags,
     completed,
     isDeleted,
+    sortKey,
+    recurrence,
+    seriesId,
   ];
 }
 
@@ -116,6 +138,9 @@ Map<String, Object?> canonicalWire(Map<String, Object?> raw) => {
   ],
   TaskFields.completed: raw[TaskFields.completed] ?? false,
   TaskFields.isDeleted: raw[TaskFields.isDeleted] ?? false,
+  TaskFields.sortKey: raw[TaskFields.sortKey] ?? '',
+  TaskFields.recurrence: raw[TaskFields.recurrence],
+  TaskFields.seriesId: raw[TaskFields.seriesId],
   'version': (raw['version'] as num?)?.toInt() ?? 0,
   'updated_at': normalizeTimestamp(raw['updated_at']),
   if (raw['server_updated_at'] != null)

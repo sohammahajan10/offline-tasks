@@ -7,7 +7,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_tasks/data/api/remote_api.dart';
 import 'package:offline_tasks/data/db/database.dart';
 import 'package:offline_tasks/data/sync/sync_engine.dart';
+import 'package:offline_tasks/domain/recurrence.dart';
 import 'package:offline_tasks/domain/task.dart';
+import 'package:offline_tasks/domain/task_query.dart';
 import 'package:offline_tasks/domain/task_repository.dart';
 
 import 'support/fake_remote_api.dart';
@@ -660,6 +662,108 @@ void main() {
         contains('other'),
         reason: "never deletes someone else's lease",
       );
+    });
+  });
+
+  group('recurring tasks and manual order across devices', () {
+    test(
+      'both devices complete the same occurrence offline: one next task',
+      () async {
+        final due = DateTime.utc(2026, 10, 20, 8);
+        final id = await a.repo.create(
+          title: 'Water plants',
+          dueAt: due,
+          recurrence: Recurrence.weekly,
+        );
+        await a.sync();
+        await b.sync();
+
+        // Both phones offline, both tick the same occurrence off.
+        clock.advance(const Duration(minutes: 1));
+        await a.repo.setCompleted(id, true);
+        clock.advance(const Duration(minutes: 1));
+        await b.repo.setCompleted(id, true);
+        final nextId = occurrenceId(id, DateTime.utc(2026, 10, 27, 8));
+        expect(
+          (await a.row(nextId))!.id,
+          (await b.row(nextId))!.id,
+          reason: 'same deterministic id on both devices',
+        );
+
+        await a.sync();
+        final reportB = await b.sync();
+        await a.sync();
+
+        expect(reportB.failed, 0);
+        expect(reportB.conflicts, 0, reason: 'identical content, nothing lost');
+        final series = server.rows.values.where((r) => r['series_id'] == id);
+        expect(series, hasLength(2), reason: 'the original + ONE next task');
+        expect(server.rows[nextId]!['completed'], isFalse);
+        expect(server.rows[id]!['completed'], isTrue);
+        for (final d in [a, b]) {
+          expect(await d.queue(), isEmpty);
+          final visible = await d.repo.watchAll().first;
+          expect(visible.map((t) => t.id).toSet(), {id, nextId});
+        }
+      },
+    );
+
+    test('moves of different tasks on two devices both survive', () async {
+      final c = await a.repo.create(title: 'C');
+      final bTask = await a.repo.create(title: 'B');
+      final aTask = await a.repo.create(title: 'A');
+      await a.sync();
+      await b.sync();
+
+      // Device A drags A to the bottom; device B drags C to the top.
+      clock.advance(const Duration(minutes: 1));
+      await a.repo.move(aTask, afterId: c);
+      clock.advance(const Duration(minutes: 1));
+      await b.repo.move(c, beforeId: aTask);
+
+      await a.sync();
+      await b.sync();
+      await a.sync();
+
+      Future<List<String>> order(Device d) async =>
+          (await d.repo
+                  .watchTasks(const TaskQuery(sort: TaskSort.manual))
+                  .first)
+              .map((t) => t.title)
+              .toList();
+      expect(await order(a), ['C', 'B', 'A']);
+      expect(await order(b), ['C', 'B', 'A']);
+      expect(await b.log(LogLevel.conflict), isEmpty);
+      expect(server.rows[bTask]!['version'], 1, reason: 'B never rewritten');
+    });
+
+    test('the same task moved on both devices: the later move wins', () async {
+      final c = await a.repo.create(title: 'C');
+      final bTask = await a.repo.create(title: 'B');
+      final aTask = await a.repo.create(title: 'A');
+      await a.sync();
+      await b.sync();
+
+      clock.advance(const Duration(minutes: 1));
+      await a.repo.move(aTask, afterId: bTask, beforeId: c); // B A C
+      clock.advance(const Duration(minutes: 1));
+      await b.repo.move(aTask, afterId: c); // B C A (later)
+
+      await a.sync();
+      await b.sync();
+      await a.sync();
+
+      final conflict = (await b.log(LogLevel.conflict)).single;
+      expect(conflict.message, contains('sort_key'));
+      expect(conflict.message, contains('kept local'));
+      for (final d in [a, b]) {
+        final titles =
+            (await d.repo
+                    .watchTasks(const TaskQuery(sort: TaskSort.manual))
+                    .first)
+                .map((t) => t.title);
+        expect(titles, ['B', 'C', 'A']);
+      }
     });
   });
 }

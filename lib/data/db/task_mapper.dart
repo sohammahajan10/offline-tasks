@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart';
 
+import '../../domain/recurrence.dart';
 import '../../domain/task.dart';
 import 'database.dart';
 
@@ -18,6 +19,9 @@ TaskItem rowToItem(TaskRow r) => TaskItem(
   version: r.version,
   updatedAt: r.updatedAt,
   dirty: r.dirty,
+  sortKey: r.sortKey,
+  recurrence: Recurrence.parse(r.recurrence),
+  seriesId: r.seriesId,
 );
 
 /// Wire-format JSON of a row: what goes into `payload_json` and to the server.
@@ -31,6 +35,9 @@ Map<String, Object?> rowToWire(TaskRow r) => {
   TaskFields.tags: decodeTags(r.tags),
   TaskFields.completed: r.completed,
   TaskFields.isDeleted: r.isDeleted,
+  TaskFields.sortKey: r.sortKey,
+  TaskFields.recurrence: r.recurrence,
+  TaskFields.seriesId: r.seriesId,
   'updated_at': normalizeTimestamp(r.updatedAt),
 };
 
@@ -47,6 +54,9 @@ TasksCompanion wireToCompanion(Map<String, Object?> w) {
     tags: Value(encodeTags((w[TaskFields.tags] as List).cast<String>())),
     completed: Value(w[TaskFields.completed] as bool),
     isDeleted: Value(w[TaskFields.isDeleted] as bool),
+    sortKey: Value(w[TaskFields.sortKey] as String),
+    recurrence: Value(w[TaskFields.recurrence] as String?),
+    seriesId: Value(w[TaskFields.seriesId] as String?),
     updatedAt: Value(DateTime.parse(w['updated_at'] as String)),
   );
 }

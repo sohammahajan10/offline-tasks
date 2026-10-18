@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../../domain/recurrence.dart';
 import '../../domain/task.dart';
 import '../../domain/task_query.dart';
 import '../format.dart';
@@ -36,6 +37,7 @@ class _TaskEditScreenState extends ConsumerState<TaskEditScreen> {
   DateTime? _dueAt;
   List<String> _tags = [];
   bool _completed = false;
+  Recurrence? _recurrence;
 
   bool get _isNew => widget.taskId == null;
 
@@ -63,6 +65,7 @@ class _TaskEditScreenState extends ConsumerState<TaskEditScreen> {
         _dueAt = task.dueAt;
         _tags = [...task.tags];
         _completed = task.completed;
+        _recurrence = task.recurrence;
       }
     });
   }
@@ -88,7 +91,8 @@ class _TaskEditScreenState extends ConsumerState<TaskEditScreen> {
           _notes.text.trim().isNotEmpty ||
           _category.text.trim().isNotEmpty ||
           _tags.isNotEmpty ||
-          _dueAt != null;
+          _dueAt != null ||
+          _recurrence != null;
     }
     return _title.text.trim() != o.title ||
         _notes.text.trim() != o.notes ||
@@ -96,11 +100,18 @@ class _TaskEditScreenState extends ConsumerState<TaskEditScreen> {
         _priority != o.priority ||
         !_sameMoment(_dueAt, o.dueAt) ||
         _completed != o.completed ||
+        _recurrence != o.recurrence ||
         !const ListEquality<String>().equals(_tags, o.tags);
   }
 
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
+    if (_recurrence != null && _dueAt == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Set a deadline for a repeating task.')),
+      );
+      return;
+    }
     _addPendingTag();
     setState(() => _saving = true);
     final repo = ref.read(taskRepositoryProvider);
@@ -115,6 +126,7 @@ class _TaskEditScreenState extends ConsumerState<TaskEditScreen> {
           dueAt: _dueAt,
           category: category.isEmpty ? null : category,
           tags: _tags,
+          recurrence: _recurrence,
         );
       } else if (_hasChanges) {
         await repo.update(
@@ -133,15 +145,39 @@ class _TaskEditScreenState extends ConsumerState<TaskEditScreen> {
                 ? null
                 : _tags,
             completed: _completed != o.completed ? _completed : null,
+            recurrence: _recurrence != o.recurrence ? _recurrence : null,
+            clearRecurrence: _recurrence == null && o.recurrence != null,
           ),
         );
       }
+      await _askForReminderPermission();
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text("Couldn't save: $e")));
+    }
+  }
+
+  /// The first time a task gets a deadline, ask to show reminders (Android
+  /// 13+ asks only once; after that this just reports the current state).
+  Future<void> _askForReminderPermission() async {
+    final notifications = ref.read(notificationsProvider);
+    final due = _dueAt;
+    if (notifications == null || due == null || due.isBefore(DateTime.now())) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    if (!await notifications.requestPermission()) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Reminders are off. Allow notifications for Offline Tasks in '
+            'Settings to be reminded when tasks are due.',
+          ),
+        ),
+      );
     }
   }
 
@@ -327,7 +363,29 @@ class _TaskEditScreenState extends ConsumerState<TaskEditScreen> {
                     onPressed: () => setState(() => _dueAt = null),
                   ),
           ),
-          const SizedBox(height: 8),
+          DropdownButtonFormField<Recurrence?>(
+            key: const Key('repeat-field'),
+            initialValue: _recurrence,
+            decoration: InputDecoration(
+              labelText: 'Repeat',
+              prefixIcon: const Icon(Icons.repeat),
+              border: const OutlineInputBorder(),
+              helperText: _recurrence == null
+                  ? null
+                  : 'Completing it creates the next one, '
+                        '${_recurrence!.label.toLowerCase()} from the deadline',
+              errorText: _recurrence != null && _dueAt == null
+                  ? 'Set a deadline first'
+                  : null,
+            ),
+            items: [
+              const DropdownMenuItem(value: null, child: Text('Never')),
+              for (final r in Recurrence.values)
+                DropdownMenuItem(value: r, child: Text(r.label)),
+            ],
+            onChanged: (r) => setState(() => _recurrence = r),
+          ),
+          const SizedBox(height: 16),
           RawAutocomplete<String>(
             textEditingController: _category,
             focusNode: _categoryFocus,

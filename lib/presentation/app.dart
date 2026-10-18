@@ -4,7 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'providers.dart';
+import 'screens/task_edit_screen.dart';
 import 'screens/task_list_screen.dart';
+
+/// Lets a tapped reminder open its task from outside the widget tree.
+final appNavigatorKey = GlobalKey<NavigatorState>();
+
+void openTaskFromReminder(String taskId) => appNavigatorKey.currentState?.push(
+  MaterialPageRoute(builder: (_) => TaskEditScreen(taskId: taskId)),
+);
 
 class OfflineTasksApp extends ConsumerStatefulWidget {
   const OfflineTasksApp({super.key});
@@ -43,6 +51,7 @@ class _OfflineTasksAppState extends ConsumerState<OfflineTasksApp> {
     // Start syncing as soon as the app runs, and right after signing in
     // (that also uploads tasks created before there was an account).
     ref.watch(syncCoordinatorProvider);
+    ref.watch(reminderSyncProvider);
     ref.listen(accountProvider, (previous, next) {
       if (previous?.value == null && next.value != null) {
         unawaited(ref.read(syncCoordinatorProvider)?.syncNow());
@@ -51,6 +60,7 @@ class _OfflineTasksAppState extends ConsumerState<OfflineTasksApp> {
 
     return MaterialApp(
       title: 'Offline Tasks',
+      navigatorKey: appNavigatorKey,
       debugShowCheckedModeBanner: false,
       theme: _theme(Brightness.light),
       darkTheme: _theme(Brightness.dark),

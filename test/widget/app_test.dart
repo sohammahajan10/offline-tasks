@@ -7,6 +7,8 @@ import 'package:offline_tasks/data/db/database.dart';
 import 'package:offline_tasks/data/sync/connectivity_monitor.dart';
 import 'package:offline_tasks/data/sync/sync_engine.dart';
 import 'package:offline_tasks/domain/account_service.dart';
+import 'package:offline_tasks/domain/recurrence.dart';
+import 'package:offline_tasks/domain/task_query.dart';
 import 'package:offline_tasks/domain/task_repository.dart';
 import 'package:offline_tasks/presentation/providers.dart';
 import 'package:offline_tasks/presentation/screens/account_screen.dart';
@@ -48,6 +50,7 @@ void main() {
           accountServiceProvider.overrideWithValue(accountService),
           accountProvider.overrideWith((ref) => Stream.value(account)),
           networkStatusProvider.overrideWith((ref) => Stream.value(network)),
+          notificationsProvider.overrideWithValue(null),
         ],
         child: MaterialApp(home: home),
       ),
@@ -153,6 +156,86 @@ void main() {
       await tester.tap(find.text('Undo'));
       await tester.pumpAndSettle();
       expect(find.text('Swipe me'), findsOneWidget);
+      await done(tester);
+    });
+  });
+
+  group('phase 5', () {
+    testWidgets('a repeating task needs a deadline', (tester) async {
+      await pump(tester);
+      await tester.tap(find.text('New task'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('title-field')), 'Gym');
+      await tester.tap(find.byKey(const Key('repeat-field')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Daily').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Set a deadline first'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('save-task')));
+      await tester.pumpAndSettle();
+      expect(await db.select(db.tasks).get(), isEmpty, reason: 'not saved');
+      await done(tester);
+    });
+
+    testWidgets('ticking off a repeating task shows the next one', (
+      tester,
+    ) async {
+      final due = DateTime.now().add(const Duration(days: 1));
+      await repo.create(
+        title: 'Water plants',
+        dueAt: due,
+        recurrence: Recurrence.weekly,
+      );
+      await pump(tester);
+      expect(find.text('Weekly'), findsOneWidget);
+
+      await tester.tap(find.byType(Checkbox));
+      await tester.pumpAndSettle();
+      expect(find.text('Water plants'), findsNWidgets(2));
+      final tasks = await db.select(db.tasks).get();
+      expect(
+        tasks.where((t) => !t.completed).single.dueAt!.toUtc(),
+        Recurrence.weekly.next(due),
+      );
+      await done(tester);
+    });
+
+    testWidgets('manual order: drag a task by its handle', (tester) async {
+      final c = await repo.create(title: 'C task');
+      await repo.create(title: 'B task');
+      final a = await repo.create(title: 'A task');
+      await pump(tester);
+      final notifier = ProviderScope.containerOf(
+        tester.element(find.byType(TaskListScreen)),
+      ).read(taskQueryProvider.notifier);
+      notifier.update((q) => q.copyWith(sort: TaskSort.manual));
+      await tester.pumpAndSettle();
+
+      // Drag "A task" (top) below "C task" (bottom).
+      final handle = find.byKey(Key('drag-$a'));
+      final gesture = await tester.startGesture(tester.getCenter(handle));
+      await tester.pump(const Duration(milliseconds: 100));
+      await gesture.moveBy(const Offset(0, 300));
+      await tester.pump();
+      await gesture.up();
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pumpAndSettle();
+
+      // A one-shot query: a stream's .first would wait on a timer that the
+      // test's fake clock never fires.
+      final order =
+          (await (db.select(
+            db.tasks,
+          )..orderBy([(t) => OrderingTerm.asc(t.sortKey)])).get()).map(
+            (t) => t.title,
+          );
+      expect(order, ['B task', 'C task', 'A task']);
+      expect(find.text('A task'), findsOneWidget);
+      final keys = {
+        for (final t in await db.select(db.tasks).get()) t.id: t.sortKey,
+      };
+      expect(keys[a]!.compareTo(keys[c]!), greaterThan(0));
       await done(tester);
     });
   });

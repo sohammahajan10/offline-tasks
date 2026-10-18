@@ -376,36 +376,77 @@ class _TaskList extends ConsumerWidget {
                   body: 'Tap "New task" to add one. It works offline too.',
                 );
         }
+        Widget row(BuildContext context, int i, {Widget? dragHandle}) {
+          final task = items[i];
+          return Dismissible(
+            key: ValueKey(task.id),
+            direction: DismissDirection.endToStart,
+            background: Container(
+              color: Theme.of(context).colorScheme.errorContainer,
+              alignment: Alignment.centerRight,
+              padding: const EdgeInsets.only(right: 24),
+              child: const Icon(Icons.delete_outline),
+            ),
+            onDismissed: (_) => _delete(context, ref, task),
+            child: TaskTile(
+              key: Key('task-${task.id}'),
+              task: task,
+              syncState: syncStates[task.id],
+              onToggle: (done) =>
+                  ref.read(taskRepositoryProvider).setCompleted(task.id, done),
+              onTap: () => openTaskEditor(context, taskId: task.id),
+              dragHandle: dragHandle,
+            ),
+          );
+        }
+
+        if (ref.watch(taskQueryProvider).sort == TaskSort.manual) {
+          return ReorderableListView.builder(
+            padding: const EdgeInsets.only(bottom: 96),
+            buildDefaultDragHandles: false,
+            itemCount: items.length,
+            onReorderItem: (from, to) => _move(ref, items, from, to),
+            itemBuilder: (context, i) => row(
+              context,
+              i,
+              dragHandle: ReorderableDragStartListener(
+                key: Key('drag-${items[i].id}'),
+                index: i,
+                child: const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Icon(
+                    Icons.drag_handle,
+                    semanticLabel: 'Drag to reorder',
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
         return ListView.separated(
           padding: const EdgeInsets.only(bottom: 96),
           itemCount: items.length,
           separatorBuilder: (_, _) => const Divider(height: 1, indent: 56),
-          itemBuilder: (context, i) {
-            final task = items[i];
-            return Dismissible(
-              key: ValueKey(task.id),
-              direction: DismissDirection.endToStart,
-              background: Container(
-                color: Theme.of(context).colorScheme.errorContainer,
-                alignment: Alignment.centerRight,
-                padding: const EdgeInsets.only(right: 24),
-                child: const Icon(Icons.delete_outline),
-              ),
-              onDismissed: (_) => _delete(context, ref, task),
-              child: TaskTile(
-                key: Key('task-${task.id}'),
-                task: task,
-                syncState: syncStates[task.id],
-                onToggle: (done) => ref
-                    .read(taskRepositoryProvider)
-                    .setCompleted(task.id, done),
-                onTap: () => openTaskEditor(context, taskId: task.id),
-              ),
-            );
-          },
+          itemBuilder: (context, i) => row(context, i),
         );
       },
     );
+  }
+
+  /// Puts the dragged task between its new neighbours ([to] is its index
+  /// once removed from [from]). Only that task gets a new order key, so a
+  /// reorder is a single change to sync.
+  Future<void> _move(WidgetRef ref, List<TaskItem> items, int from, int to) {
+    final list = [...items];
+    final moved = list.removeAt(from);
+    list.insert(to, moved);
+    return ref
+        .read(taskRepositoryProvider)
+        .move(
+          moved.id,
+          afterId: to > 0 ? list[to - 1].id : null,
+          beforeId: to < list.length - 1 ? list[to + 1].id : null,
+        );
   }
 
   Future<void> _delete(

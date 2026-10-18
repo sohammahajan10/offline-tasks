@@ -10,6 +10,7 @@ import 'generated/schema.dart';
 import 'generated/schema_v1.dart' as v1;
 import 'generated/schema_v2.dart' as v2;
 import 'generated/schema_v3.dart' as v3;
+import 'generated/schema_v4.dart' as v4;
 
 void main() {
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
@@ -182,6 +183,42 @@ void main() {
         expect((op.opId, op.baseVersion), ('op-a', 4));
         expect(await newDb.select(newDb.syncLog).get(), isEmpty);
         expect(await newDb.select(newDb.syncState).get(), isEmpty);
+      },
+    );
+  });
+
+  test('v3 to v4 gives existing tasks distinct order keys by id', () async {
+    await verifier.testWithDataIntegrity(
+      oldVersion: 3,
+      newVersion: 4,
+      createOld: v3.DatabaseAtV3.new,
+      createNew: v4.DatabaseAtV4.new,
+      openTestedDatabase: AppDatabase.new,
+      createItems: (batch, oldDb) {
+        for (final id in ['c', 'a', 'b']) {
+          batch.insert(
+            oldDb.tasks,
+            v3.TasksCompanion.insert(
+              id: id,
+              title: 'Task $id',
+              updatedAt: '2026-10-19T09:00:00.000Z',
+            ),
+          );
+        }
+      },
+      validateItems: (newDb) async {
+        final rows = await (newDb.select(
+          newDb.tasks,
+        )..orderBy([(t) => OrderingTerm.asc(t.sortKey)])).get();
+        expect(rows.map((r) => (r.id, r.sortKey)), [
+          ('a', 'a0'),
+          ('b', 'a1'),
+          ('c', 'a2'),
+        ]);
+        expect(
+          rows.every((r) => r.recurrence == null && r.seriesId == null),
+          isTrue,
+        );
       },
     );
   });

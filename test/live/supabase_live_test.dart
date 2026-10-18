@@ -130,4 +130,26 @@ void main() {
         : 'set SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_TEST_EMAIL and '
               'SUPABASE_TEST_PASSWORD in .env and pass --dart-define-from-file=.env',
   );
+
+  test(
+    'order key, recurrence and series id round-trip (needs migration 2)',
+    () async {
+      final id = uuid.v4();
+      final pushed = await api.push(
+        opId: uuid.v4(),
+        task: {
+          ...task(id, 'weekly', deleted: true),
+          'due_at': DateTime.now().toUtc().toIso8601String(),
+          'sort_key': 'a0V',
+          'recurrence': 'weekly',
+          'series_id': id,
+        },
+        baseVersion: 0,
+      );
+      expect(pushed.serverRow['sort_key'], 'a0V');
+      expect(pushed.serverRow['recurrence'], 'weekly');
+      expect(pushed.serverRow['series_id'], id);
+    },
+    skip: configured ? false : 'see above',
+  );
 }

@@ -155,6 +155,40 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _sortKeyMeta = const VerificationMeta(
+    'sortKey',
+  );
+  @override
+  late final GeneratedColumn<String> sortKey = GeneratedColumn<String>(
+    'sort_key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
+  static const VerificationMeta _recurrenceMeta = const VerificationMeta(
+    'recurrence',
+  );
+  @override
+  late final GeneratedColumn<String> recurrence = GeneratedColumn<String>(
+    'recurrence',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _seriesIdMeta = const VerificationMeta(
+    'seriesId',
+  );
+  @override
+  late final GeneratedColumn<String> seriesId = GeneratedColumn<String>(
+    'series_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -170,6 +204,9 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
     updatedAt,
     dirty,
     serverSnapshot,
+    sortKey,
+    recurrence,
+    seriesId,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -267,6 +304,24 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
         ),
       );
     }
+    if (data.containsKey('sort_key')) {
+      context.handle(
+        _sortKeyMeta,
+        sortKey.isAcceptableOrUnknown(data['sort_key']!, _sortKeyMeta),
+      );
+    }
+    if (data.containsKey('recurrence')) {
+      context.handle(
+        _recurrenceMeta,
+        recurrence.isAcceptableOrUnknown(data['recurrence']!, _recurrenceMeta),
+      );
+    }
+    if (data.containsKey('series_id')) {
+      context.handle(
+        _seriesIdMeta,
+        seriesId.isAcceptableOrUnknown(data['series_id']!, _seriesIdMeta),
+      );
+    }
     return context;
   }
 
@@ -328,6 +383,18 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
         DriftSqlType.string,
         data['${effectivePrefix}server_snapshot'],
       ),
+      sortKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}sort_key'],
+      )!,
+      recurrence: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}recurrence'],
+      ),
+      seriesId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}series_id'],
+      ),
     );
   }
 
@@ -358,6 +425,16 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
   /// Wire JSON of the last server state this row was reconciled with: the
   /// common ancestor for the three-way field merge. Null until first synced.
   final String? serverSnapshot;
+
+  /// Manual order: a fractional index key (see FractionalIndex). Ties are
+  /// broken by id.
+  final String sortKey;
+
+  /// 'daily' | 'weekly' | 'monthly', or null for a one-off task.
+  final String? recurrence;
+
+  /// Id shared by every occurrence of a recurring task (the first one's id).
+  final String? seriesId;
   const TaskRow({
     required this.id,
     required this.title,
@@ -372,6 +449,9 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     required this.updatedAt,
     required this.dirty,
     this.serverSnapshot,
+    required this.sortKey,
+    this.recurrence,
+    this.seriesId,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -394,6 +474,13 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     map['dirty'] = Variable<bool>(dirty);
     if (!nullToAbsent || serverSnapshot != null) {
       map['server_snapshot'] = Variable<String>(serverSnapshot);
+    }
+    map['sort_key'] = Variable<String>(sortKey);
+    if (!nullToAbsent || recurrence != null) {
+      map['recurrence'] = Variable<String>(recurrence);
+    }
+    if (!nullToAbsent || seriesId != null) {
+      map['series_id'] = Variable<String>(seriesId);
     }
     return map;
   }
@@ -419,6 +506,13 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       serverSnapshot: serverSnapshot == null && nullToAbsent
           ? const Value.absent()
           : Value(serverSnapshot),
+      sortKey: Value(sortKey),
+      recurrence: recurrence == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recurrence),
+      seriesId: seriesId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(seriesId),
     );
   }
 
@@ -441,6 +535,9 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
       dirty: serializer.fromJson<bool>(json['dirty']),
       serverSnapshot: serializer.fromJson<String?>(json['serverSnapshot']),
+      sortKey: serializer.fromJson<String>(json['sortKey']),
+      recurrence: serializer.fromJson<String?>(json['recurrence']),
+      seriesId: serializer.fromJson<String?>(json['seriesId']),
     );
   }
   @override
@@ -460,6 +557,9 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
       'dirty': serializer.toJson<bool>(dirty),
       'serverSnapshot': serializer.toJson<String?>(serverSnapshot),
+      'sortKey': serializer.toJson<String>(sortKey),
+      'recurrence': serializer.toJson<String?>(recurrence),
+      'seriesId': serializer.toJson<String?>(seriesId),
     };
   }
 
@@ -477,6 +577,9 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     DateTime? updatedAt,
     bool? dirty,
     Value<String?> serverSnapshot = const Value.absent(),
+    String? sortKey,
+    Value<String?> recurrence = const Value.absent(),
+    Value<String?> seriesId = const Value.absent(),
   }) => TaskRow(
     id: id ?? this.id,
     title: title ?? this.title,
@@ -493,6 +596,9 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     serverSnapshot: serverSnapshot.present
         ? serverSnapshot.value
         : this.serverSnapshot,
+    sortKey: sortKey ?? this.sortKey,
+    recurrence: recurrence.present ? recurrence.value : this.recurrence,
+    seriesId: seriesId.present ? seriesId.value : this.seriesId,
   );
   TaskRow copyWithCompanion(TasksCompanion data) {
     return TaskRow(
@@ -511,6 +617,11 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       serverSnapshot: data.serverSnapshot.present
           ? data.serverSnapshot.value
           : this.serverSnapshot,
+      sortKey: data.sortKey.present ? data.sortKey.value : this.sortKey,
+      recurrence: data.recurrence.present
+          ? data.recurrence.value
+          : this.recurrence,
+      seriesId: data.seriesId.present ? data.seriesId.value : this.seriesId,
     );
   }
 
@@ -529,7 +640,10 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
           ..write('version: $version, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('dirty: $dirty, ')
-          ..write('serverSnapshot: $serverSnapshot')
+          ..write('serverSnapshot: $serverSnapshot, ')
+          ..write('sortKey: $sortKey, ')
+          ..write('recurrence: $recurrence, ')
+          ..write('seriesId: $seriesId')
           ..write(')'))
         .toString();
   }
@@ -549,6 +663,9 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     updatedAt,
     dirty,
     serverSnapshot,
+    sortKey,
+    recurrence,
+    seriesId,
   );
   @override
   bool operator ==(Object other) =>
@@ -566,7 +683,10 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
           other.version == this.version &&
           other.updatedAt == this.updatedAt &&
           other.dirty == this.dirty &&
-          other.serverSnapshot == this.serverSnapshot);
+          other.serverSnapshot == this.serverSnapshot &&
+          other.sortKey == this.sortKey &&
+          other.recurrence == this.recurrence &&
+          other.seriesId == this.seriesId);
 }
 
 class TasksCompanion extends UpdateCompanion<TaskRow> {
@@ -583,6 +703,9 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
   final Value<DateTime> updatedAt;
   final Value<bool> dirty;
   final Value<String?> serverSnapshot;
+  final Value<String> sortKey;
+  final Value<String?> recurrence;
+  final Value<String?> seriesId;
   final Value<int> rowid;
   const TasksCompanion({
     this.id = const Value.absent(),
@@ -598,6 +721,9 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     this.updatedAt = const Value.absent(),
     this.dirty = const Value.absent(),
     this.serverSnapshot = const Value.absent(),
+    this.sortKey = const Value.absent(),
+    this.recurrence = const Value.absent(),
+    this.seriesId = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TasksCompanion.insert({
@@ -614,6 +740,9 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     required DateTime updatedAt,
     this.dirty = const Value.absent(),
     this.serverSnapshot = const Value.absent(),
+    this.sortKey = const Value.absent(),
+    this.recurrence = const Value.absent(),
+    this.seriesId = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        title = Value(title),
@@ -632,6 +761,9 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     Expression<DateTime>? updatedAt,
     Expression<bool>? dirty,
     Expression<String>? serverSnapshot,
+    Expression<String>? sortKey,
+    Expression<String>? recurrence,
+    Expression<String>? seriesId,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -648,6 +780,9 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
       if (updatedAt != null) 'updated_at': updatedAt,
       if (dirty != null) 'dirty': dirty,
       if (serverSnapshot != null) 'server_snapshot': serverSnapshot,
+      if (sortKey != null) 'sort_key': sortKey,
+      if (recurrence != null) 'recurrence': recurrence,
+      if (seriesId != null) 'series_id': seriesId,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -666,6 +801,9 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     Value<DateTime>? updatedAt,
     Value<bool>? dirty,
     Value<String?>? serverSnapshot,
+    Value<String>? sortKey,
+    Value<String?>? recurrence,
+    Value<String?>? seriesId,
     Value<int>? rowid,
   }) {
     return TasksCompanion(
@@ -682,6 +820,9 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
       updatedAt: updatedAt ?? this.updatedAt,
       dirty: dirty ?? this.dirty,
       serverSnapshot: serverSnapshot ?? this.serverSnapshot,
+      sortKey: sortKey ?? this.sortKey,
+      recurrence: recurrence ?? this.recurrence,
+      seriesId: seriesId ?? this.seriesId,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -728,6 +869,15 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     if (serverSnapshot.present) {
       map['server_snapshot'] = Variable<String>(serverSnapshot.value);
     }
+    if (sortKey.present) {
+      map['sort_key'] = Variable<String>(sortKey.value);
+    }
+    if (recurrence.present) {
+      map['recurrence'] = Variable<String>(recurrence.value);
+    }
+    if (seriesId.present) {
+      map['series_id'] = Variable<String>(seriesId.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -750,6 +900,9 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
           ..write('updatedAt: $updatedAt, ')
           ..write('dirty: $dirty, ')
           ..write('serverSnapshot: $serverSnapshot, ')
+          ..write('sortKey: $sortKey, ')
+          ..write('recurrence: $recurrence, ')
+          ..write('seriesId: $seriesId, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1962,6 +2115,9 @@ typedef $$TasksTableCreateCompanionBuilder = TasksCompanion Function({
   required DateTime updatedAt,
   Value<bool> dirty,
   Value<String?> serverSnapshot,
+  Value<String> sortKey,
+  Value<String?> recurrence,
+  Value<String?> seriesId,
   Value<int> rowid,
 });
 typedef $$TasksTableUpdateCompanionBuilder = TasksCompanion Function({
@@ -1978,6 +2134,9 @@ typedef $$TasksTableUpdateCompanionBuilder = TasksCompanion Function({
   Value<DateTime> updatedAt,
   Value<bool> dirty,
   Value<String?> serverSnapshot,
+  Value<String> sortKey,
+  Value<String?> recurrence,
+  Value<String?> seriesId,
   Value<int> rowid,
 });
 
@@ -2075,6 +2234,21 @@ class $$TasksTableFilterComposer extends Composer<_$AppDatabase, $TasksTable> {
 
   ColumnFilters<String> get serverSnapshot => $composableBuilder(
     column: $table.serverSnapshot,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get sortKey => $composableBuilder(
+    column: $table.sortKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get recurrence => $composableBuilder(
+    column: $table.recurrence,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get seriesId => $composableBuilder(
+    column: $table.seriesId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2177,6 +2351,21 @@ class $$TasksTableOrderingComposer
     column: $table.serverSnapshot,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get sortKey => $composableBuilder(
+    column: $table.sortKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get recurrence => $composableBuilder(
+    column: $table.recurrence,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get seriesId => $composableBuilder(
+    column: $table.seriesId,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$TasksTableAnnotationComposer
@@ -2228,6 +2417,17 @@ class $$TasksTableAnnotationComposer
     column: $table.serverSnapshot,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get sortKey =>
+      $composableBuilder(column: $table.sortKey, builder: (column) => column);
+
+  GeneratedColumn<String> get recurrence => $composableBuilder(
+    column: $table.recurrence,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get seriesId =>
+      $composableBuilder(column: $table.seriesId, builder: (column) => column);
 
   Expression<T> syncQueueRefs<T extends Object>(
     Expression<T> Function($$SyncQueueTableAnnotationComposer a) f,
@@ -2296,6 +2496,9 @@ class $$TasksTableTableManager
                 Value<DateTime> updatedAt = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
                 Value<String?> serverSnapshot = const Value.absent(),
+                Value<String> sortKey = const Value.absent(),
+                Value<String?> recurrence = const Value.absent(),
+                Value<String?> seriesId = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TasksCompanion(
                 id: id,
@@ -2311,6 +2514,9 @@ class $$TasksTableTableManager
                 updatedAt: updatedAt,
                 dirty: dirty,
                 serverSnapshot: serverSnapshot,
+                sortKey: sortKey,
+                recurrence: recurrence,
+                seriesId: seriesId,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -2328,6 +2534,9 @@ class $$TasksTableTableManager
                 required DateTime updatedAt,
                 Value<bool> dirty = const Value.absent(),
                 Value<String?> serverSnapshot = const Value.absent(),
+                Value<String> sortKey = const Value.absent(),
+                Value<String?> recurrence = const Value.absent(),
+                Value<String?> seriesId = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TasksCompanion.insert(
                 id: id,
@@ -2343,6 +2552,9 @@ class $$TasksTableTableManager
                 updatedAt: updatedAt,
                 dirty: dirty,
                 serverSnapshot: serverSnapshot,
+                sortKey: sortKey,
+                recurrence: recurrence,
+                seriesId: seriesId,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

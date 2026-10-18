@@ -46,12 +46,16 @@ class TaskTile extends StatelessWidget {
     required this.syncState,
     required this.onToggle,
     required this.onTap,
+    this.dragHandle,
   });
 
   final TaskItem task;
   final TaskSyncState? syncState;
   final ValueChanged<bool> onToggle;
   final VoidCallback onTap;
+
+  /// Shown in manual order, to drag the task to a new position.
+  final Widget? dragHandle;
 
   @override
   Widget build(BuildContext context) {
@@ -65,6 +69,12 @@ class TaskTile extends StatelessWidget {
           icon: task.isOverdue ? Icons.warning_amber : Icons.event,
           label: (task.isOverdue ? 'Overdue · ' : '') + formatDue(task.dueAt!),
           color: task.isOverdue ? scheme.error : scheme.onSurfaceVariant,
+        ),
+      if (task.recurrence != null)
+        _Chip(
+          icon: Icons.repeat,
+          label: task.recurrence!.label,
+          color: scheme.onSurfaceVariant,
         ),
       if (task.category != null)
         _Chip(
@@ -112,7 +122,16 @@ class TaskTile extends StatelessWidget {
               padding: const EdgeInsets.only(top: 4),
               child: Wrap(spacing: 10, runSpacing: 2, children: details),
             ),
-      trailing: SyncBadge(state: syncState),
+      trailing: dragHandle == null
+          ? SyncBadge(state: syncState)
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SyncBadge(state: syncState),
+                const SizedBox(width: 4),
+                dragHandle!,
+              ],
+            ),
     );
   }
 }

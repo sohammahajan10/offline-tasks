@@ -6,6 +6,8 @@ import 'package:uuid/uuid.dart';
 
 import '../data/db/database.dart';
 import '../data/db/task_mapper.dart';
+import 'fractional_index.dart';
+import 'recurrence.dart';
 import 'task.dart';
 import 'task_query.dart';
 
@@ -110,6 +112,12 @@ class TaskRepository {
       TaskSort.dueDate => [due, (t) => OrderingTerm.desc(t.priority)],
       TaskSort.priority => [(t) => OrderingTerm.desc(t.priority), due],
       TaskSort.recent => [(t) => OrderingTerm.desc(t.updatedAt)],
+      // Equal keys (two devices inserting at the same spot offline) are
+      // ordered by id, so every device shows the same order.
+      TaskSort.manual => [
+        (t) => OrderingTerm.asc(t.sortKey),
+        (t) => OrderingTerm.asc(t.id),
+      ],
     });
     return q.map(rowToItem).watch();
   }
@@ -141,7 +149,8 @@ class TaskRepository {
 
   // --------------------------------------------------------------- writes
 
-  /// Creates a task with a client-generated UUID and returns its id.
+  /// Creates a task with a client-generated UUID and returns its id. New
+  /// tasks go to the top of the manual order.
   Future<String> create({
     required String title,
     String notes = '',
@@ -149,7 +158,11 @@ class TaskRepository {
     DateTime? dueAt,
     String? category,
     List<String> tags = const [],
+    Recurrence? recurrence,
   }) {
+    if (recurrence != null && dueAt == null) {
+      throw ArgumentError('A repeating task needs a deadline');
+    }
     final id = _newId();
     return _db
         .transaction(() async {
@@ -166,6 +179,9 @@ class TaskRepository {
                   tags: Value(encodeTags(_cleanTags(tags))),
                   updatedAt: _clock(),
                   dirty: const Value(true),
+                  sortKey: Value(await _keyAtTop()),
+                  recurrence: Value(recurrence?.name),
+                  seriesId: Value(recurrence == null ? null : id),
                 ),
               );
           await _enqueue(id);
@@ -197,6 +213,9 @@ class TaskRepository {
           ? const Value.absent()
           : Value(encodeTags(_cleanTags(patch.tags!))),
       completed: Value.absentIfNull(patch.completed),
+      recurrence: patch.clearRecurrence
+          ? const Value(null)
+          : Value.absentIfNull(patch.recurrence?.name),
     ),
   );
 
@@ -212,21 +231,115 @@ class TaskRepository {
   Future<void> restore(String id) =>
       _write(id, const TasksCompanion(isDeleted: Value(false)));
 
-  // ------------------------------------------------------------ internals
-
-  Future<void> _write(String id, TasksCompanion changes) => _db
+  /// Drag-to-reorder: puts [id] between the tasks now shown above ([afterId])
+  /// and below ([beforeId]) it. Only the moved task gets a new key, so only
+  /// it syncs, and concurrent moves on two devices conflict only if they
+  /// moved the same task (then the later move wins, like any field).
+  Future<void> move(String id, {String? afterId, String? beforeId}) => _db
       .transaction(() async {
-        final updated =
-            await (_db.update(_db.tasks)..where((t) => t.id.equals(id))).write(
-              changes.copyWith(
-                updatedAt: Value(_clock()),
-                dirty: const Value(true),
-              ),
-            );
-        if (updated == 0) throw StateError('Task $id not found');
-        await _enqueue(id);
+        final above = afterId == null ? null : (await _row(afterId))?.sortKey;
+        var below = beforeId == null ? null : (await _row(beforeId))?.sortKey;
+        // Neighbours with equal keys (two devices inserted at the same spot
+        // offline; shown in id order) have no room between them: place the
+        // task just after the upper one instead.
+        if (above != null && below != null && above.compareTo(below) >= 0) {
+          below = null;
+        }
+        final key = FractionalIndex.keyBetween(
+          _validKeyOrNull(above),
+          _validKeyOrNull(below),
+        );
+        await _apply(id, TasksCompanion(sortKey: Value(key)));
       })
       .then((_) => _writes.add(null));
+
+  // ------------------------------------------------------------ internals
+
+  Future<void> _write(String id, TasksCompanion changes) =>
+      _db.transaction(() => _apply(id, changes)).then((_) => _writes.add(null));
+
+  /// Writes [changes] and enqueues them. Must run inside a transaction.
+  Future<void> _apply(String id, TasksCompanion changes) async {
+    final before = await _row(id);
+    if (before == null) throw StateError('Task $id not found');
+    await (_db.update(_db.tasks)..where((t) => t.id.equals(id))).write(
+      changes.copyWith(updatedAt: Value(_clock()), dirty: const Value(true)),
+    );
+    var after = (await _row(id))!;
+    if (after.recurrence != null) {
+      if (after.dueAt == null) {
+        throw ArgumentError('A repeating task needs a deadline');
+      }
+      if (after.seriesId == null) {
+        await (_db.update(_db.tasks)..where((t) => t.id.equals(id))).write(
+          TasksCompanion(seriesId: Value(id)),
+        );
+        after = (await _row(id))!;
+      }
+    }
+    await _enqueue(id);
+    if (!before.completed && after.completed && after.recurrence != null) {
+      await _createNextOccurrence(after);
+    }
+  }
+
+  /// Completing a repeating task creates the next one, in the same
+  /// transaction. Its id is derived from the series and the next due time
+  /// (see [occurrenceId]), so two devices completing the same occurrence
+  /// offline create the same task, which sync then merges into one.
+  Future<void> _createNextOccurrence(TaskRow done) async {
+    final rule = Recurrence.parse(done.recurrence)!;
+    final seriesId = done.seriesId ?? done.id;
+    final nextDue = rule.next(done.dueAt!);
+    final nextId = occurrenceId(seriesId, nextDue);
+    // Already here: created earlier (completed, reopened, completed again),
+    // or pulled from another device that got there first.
+    if (await _row(nextId) != null) return;
+    await _db
+        .into(_db.tasks)
+        .insert(
+          TasksCompanion.insert(
+            id: nextId,
+            title: done.title,
+            notes: Value(done.notes),
+            priority: Value(done.priority),
+            dueAt: Value(nextDue),
+            category: Value(done.category),
+            tags: Value(done.tags),
+            sortKey: Value(done.sortKey),
+            recurrence: Value(done.recurrence),
+            seriesId: Value(seriesId),
+            updatedAt: _clock(),
+            dirty: const Value(true),
+          ),
+        );
+    await _enqueue(nextId);
+  }
+
+  Future<TaskRow?> _row(String id) =>
+      (_db.select(_db.tasks)..where((t) => t.id.equals(id))).getSingleOrNull();
+
+  /// A key above every task's, so new tasks appear first in manual order.
+  Future<String> _keyAtTop() async {
+    final min = _db.tasks.sortKey.min();
+    final row =
+        await (_db.selectOnly(_db.tasks)
+              ..addColumns([min])
+              ..where(_db.tasks.sortKey.equals('').not()))
+            .getSingle();
+    return FractionalIndex.keyBetween(null, _validKeyOrNull(row.read(min)));
+  }
+
+  /// Treats an empty or malformed key (legacy data) as "no bound".
+  static String? _validKeyOrNull(String? key) {
+    if (key == null || key.isEmpty) return null;
+    try {
+      FractionalIndex.keyBetween(key, null);
+      return key;
+    } on ArgumentError {
+      return null;
+    }
+  }
 
   /// Adds or refreshes the task's outbox entry. Must run inside a transaction.
   ///
