@@ -21,12 +21,13 @@ class SyncReport {
   /// Why the run stopped early (e.g. offline), or null if it completed.
   String? error;
 
-  /// True when sync was not attempted (signed out).
-  bool skipped = false;
+  /// Set when sync was not attempted (signed out, or another isolate holds
+  /// the lease); says why.
+  String? skipped;
 
   @override
-  String toString() => skipped
-      ? 'skipped'
+  String toString() => skipped != null
+      ? 'skipped: $skipped'
       : 'pushed $pushed, pulled $pulled, conflicts $conflicts, '
             'failed $failed${error == null ? '' : ', error: $error'}';
 }
@@ -51,6 +52,7 @@ class SyncEngine {
     this.pageSize = 500,
     this.cursorOverlap = const Duration(seconds: 5),
     this.maxConflictRetries = 3,
+    this.leaseDuration = const Duration(minutes: 2),
   }) : _clock = clock ?? DateTime.now,
        _random = random ?? Random(),
        _newId = newId ?? const Uuid().v4;
@@ -68,8 +70,17 @@ class SyncEngine {
   /// pulled; re-reading is harmless because applying a row is idempotent.
   final Duration cursorOverlap;
 
-  /// Guards against two devices editing the same task in a tight loop.
+  /// Stale-version rounds (merge + re-push) per task and run. After that the
+  /// entry falls back to a normal retry with backoff.
   final int maxConflictRetries;
+
+  /// How long a sync run may hold the cross-isolate lease without renewing it.
+  final Duration leaseDuration;
+
+  static const leaseKey = 'sync_lease';
+
+  /// Identifies this engine instance as a lease holder.
+  final String _owner = const Uuid().v4();
 
   Future<SyncReport>? _running;
 
@@ -87,14 +98,21 @@ class SyncEngine {
   Future<SyncReport> _sync() async {
     final report = SyncReport();
     final userId = _api.userId;
-    if (userId == null) return report..skipped = true;
+    if (userId == null) return report..skipped = 'signed out';
+    if (!await _acquireLease()) {
+      return report..skipped = 'another sync is running';
+    }
 
-    await _recoverInFlight();
     try {
+      await _recoverInFlight();
       await _push(report);
       await _pull(userId, report);
     } on RemoteException catch (e) {
       report.error = e.message;
+    } on _LeaseLost {
+      report.error = 'lost the sync lease to another run';
+    } finally {
+      await _releaseLease();
     }
     if (report.pushed + report.pulled + report.failed > 0 ||
         report.error != null) {
@@ -109,8 +127,51 @@ class SyncEngine {
     return report;
   }
 
+  // ------------------------------------------------------------- lease
+  //
+  // The app's isolate and the WorkManager isolate share the database file but
+  // not memory, so mutual exclusion lives in a `sync_state` row:
+  // {"owner": <engine id>, "expires": <epoch ms>}. Taking it is one atomic
+  // upsert, which SQLite serialises across connections. A holder that dies
+  // just stops renewing, and the lease expires.
+
+  /// Takes the lease, or renews it if we already hold it. Succeeds when it is
+  /// free, ours, expired, or expires further ahead than any lease we would
+  /// grant (the phone's clock went backwards).
+  Future<bool> _acquireLease() async {
+    final now = _clock().millisecondsSinceEpoch;
+    final expires = now + leaseDuration.inMilliseconds;
+    await _db.customStatement(
+      'INSERT INTO sync_state (key, value) VALUES (?, ?) '
+      'ON CONFLICT (key) DO UPDATE SET value = excluded.value '
+      "WHERE json_extract(sync_state.value, '\$.owner') = ? "
+      "OR json_extract(sync_state.value, '\$.expires') <= ? "
+      "OR json_extract(sync_state.value, '\$.expires') > ?",
+      [
+        leaseKey,
+        jsonEncode({'owner': _owner, 'expires': expires}),
+        _owner,
+        now,
+        expires,
+      ],
+    );
+    final current = await _db.readState(leaseKey);
+    return current != null && jsonDecode(current)['owner'] == _owner;
+  }
+
+  Future<void> _renewLease() async {
+    if (!await _acquireLease()) throw const _LeaseLost();
+  }
+
+  Future<void> _releaseLease() => _db.customStatement(
+    "DELETE FROM sync_state WHERE key = ? "
+    "AND json_extract(value, '\$.owner') = ?",
+    [leaseKey, _owner],
+  );
+
   /// An `in_flight` entry at the start of a run was interrupted (app killed
-  /// mid-push). Sending it again is safe: same op id, so the server either
+  /// mid-push). Only the lease holder gets here, so no other run is sending
+  /// it right now. Sending it again is safe: same op id, so the server either
   /// applies it or recognises it as already applied.
   Future<void> _recoverInFlight() async {
     final n =
@@ -129,6 +190,7 @@ class SyncEngine {
     while (true) {
       final op = await _nextOp(conflictRounds);
       if (op == null) return;
+      await _renewLease();
 
       await (_db.update(_db.syncQueue)..where((q) => q.seq.equals(op.seq)))
           .write(const SyncQueueCompanion(status: Value(OpStatus.inFlight)));
@@ -176,15 +238,22 @@ class SyncEngine {
             taskId: op.taskId,
           );
         case PushConflict(:final serverRow):
-          conflictRounds.update(op.taskId, (n) => n + 1, ifAbsent: () => 1);
+          // Stale base version: not a failure. Merge with the server's current
+          // row (returned with the rejection, so no extra request), re-target
+          // the entry at that version, and the loop pushes it again.
+          final round = conflictRounds.update(
+            op.taskId,
+            (n) => n + 1,
+            ifAbsent: () => 1,
+          );
           await _log(
             LogLevel.info,
             '“${payload[TaskFields.title]}” changed on the server '
-            '(v${op.baseVersion} → v${serverRow['version']}); merging',
+            '(v${op.baseVersion} → v${serverRow['version']}); merging '
+            '(round $round/$maxConflictRetries)',
             taskId: op.taskId,
           );
           await _db.transaction(() async {
-            // Not a failure: back to pending without using up an attempt.
             await (_db.update(
               _db.syncQueue,
             )..where((q) => q.seq.equals(op.seq))).write(
@@ -198,6 +267,23 @@ class SyncEngine {
               report: report,
             );
           });
+          if (round >= maxConflictRetries) {
+            // Someone keeps winning the race: back off like any other
+            // retryable failure (counts as an attempt, so it can still end
+            // up failed after Backoff.maxAttempts runs like this).
+            final entry = await _entry(op.seq);
+            if (entry != null) {
+              await _recordFailure(
+                entry,
+                payload,
+                RemoteException(
+                  'Still out of date after $round merge rounds',
+                  retryable: true,
+                ),
+                report,
+              );
+            }
+          }
       }
     }
   }
@@ -291,6 +377,7 @@ class SyncEngine {
         final at = DateTime.parse(remote['server_updated_at'] as String);
         if (newest == null || at.isAfter(newest)) newest = at;
       }
+      await _renewLease();
       // Saved per page, so an interrupted pull resumes instead of restarting.
       if (newest != null) {
         await _db.writeState(cursorKey, newest.toUtc().toIso8601String());
@@ -423,6 +510,10 @@ class SyncEngine {
   Future<TaskRow?> _task(String id) =>
       (_db.select(_db.tasks)..where((t) => t.id.equals(id))).getSingleOrNull();
 
+  Future<SyncOp?> _entry(int seq) => (_db.select(
+    _db.syncQueue,
+  )..where((q) => q.seq.equals(seq))).getSingleOrNull();
+
   Future<void> _resetFailed(
     Expression<bool> Function($SyncQueueTable q) filter,
   ) async {
@@ -442,4 +533,8 @@ class SyncEngine {
 
   Future<void> _log(String level, String message, {String? taskId}) =>
       _db.log(level, message, taskId: taskId, at: _clock());
+}
+
+class _LeaseLost implements Exception {
+  const _LeaseLost();
 }

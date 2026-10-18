@@ -134,24 +134,33 @@ void main() {
       },
     );
 
-    test('a new edit gives a failed op a fresh set of attempts', () async {
-      final id = await repo.create(title: 'Flaky');
-      await db
-          .update(db.syncQueue)
-          .write(
-            const SyncQueueCompanion(
-              status: Value(OpStatus.failed),
-              attempts: Value(5),
-              lastError: Value('boom'),
-            ),
-          );
+    test(
+      'merging into a failed entry resets it: pending, 0 attempts, new op id',
+      () async {
+        final id = await repo.create(title: 'Flaky');
+        await db
+            .update(db.syncQueue)
+            .write(
+              const SyncQueueCompanion(
+                status: Value(OpStatus.failed),
+                attempts: Value(5),
+                lastError: Value('boom'),
+              ),
+            );
 
-      await repo.setCompleted(id, true);
-      final op = (await queue()).single;
-      expect(op.status, OpStatus.pending);
-      expect(op.attempts, 0);
-      expect(op.lastError, isNull);
-    });
+        final failed = (await queue()).single;
+
+        await repo.setCompleted(id, true);
+        final op = (await queue()).single;
+        expect(op.seq, failed.seq, reason: 'merged, not a new entry');
+        expect(op.status, OpStatus.pending);
+        expect(op.attempts, 0);
+        expect(op.nextRetryAt, isNull);
+        expect(op.lastError, isNull);
+        expect(op.opId, isNot(failed.opId), reason: 'new payload, new op id');
+        expect(jsonDecode(op.payloadJson)['completed'], isTrue);
+      },
+    );
 
     test('a merge keeps the base_version the edits started from', () async {
       final id = await repo.create(title: 'Synced');

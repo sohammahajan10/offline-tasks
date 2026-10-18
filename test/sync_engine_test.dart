@@ -287,6 +287,66 @@ void main() {
       },
     );
 
+    test(
+      'a stale version is merged and re-pushed, never marked failed',
+      () async {
+        final id = await a.repo.create(title: 'Contested');
+        await a.sync();
+        await a.repo.update(id, const TaskPatch(title: 'Mine'));
+        // Another device writes a different field just before our push lands.
+        var raced = false;
+        server.onPush = (call) async {
+          if (raced) return;
+          raced = true;
+          server.serverEdit(id, {'notes': 'theirs'});
+        };
+
+        final report = await a.sync();
+
+        expect(report.error, isNull);
+        expect(report.failed, 0);
+        expect(server.pushCalls.map((c) => c.baseVersion), [0, 1, 2]);
+        expect(server.rows[id]!['title'], 'Mine');
+        expect(server.rows[id]!['notes'], 'theirs');
+        expect(await a.queue(), isEmpty);
+      },
+    );
+
+    test(
+      'after 3 stale rounds the entry falls back to a normal retry',
+      () async {
+        final id = await a.repo.create(title: 'Hot task');
+        await a.sync();
+        await a.repo.update(id, const TaskPatch(title: 'Mine'));
+        var n = 0;
+        server.onPush = (call) async =>
+            server.serverEdit(id, {'notes': '${n++}'});
+
+        final report = await a.sync();
+
+        expect(server.pushCalls.skip(1), hasLength(3), reason: '3 rounds');
+        expect(report.failed, 0);
+        final op = (await a.queue()).single;
+        expect(op.status, OpStatus.pending, reason: 'not failed');
+        expect(op.attempts, 1);
+        expect(op.nextRetryAt, isNotNull);
+        expect(op.lastError, 'Still out of date after 3 merge rounds');
+        expect(
+          op.baseVersion,
+          server.rows[id]!['version'],
+          reason: 'already re-targeted at the latest version',
+        );
+
+        // The other device calms down; the backoff retry goes through.
+        server.onPush = null;
+        clock.t = op.nextRetryAt!;
+        await a.sync();
+        expect(await a.queue(), isEmpty);
+        expect(server.rows[id]!['title'], 'Mine');
+        expect(server.rows[id]!['notes'], '2');
+      },
+    );
+
     test('concurrent sync calls share one run', () async {
       await a.repo.create(title: 'Once');
       final results = await Future.wait([a.sync(), a.sync()]);
@@ -298,7 +358,7 @@ void main() {
       server.userId = null;
       await a.repo.create(title: 'Local only');
       final report = await a.sync();
-      expect(report.skipped, isTrue);
+      expect(report.skipped, 'signed out');
       expect(server.pushCalls, isEmpty);
       expect(await a.queue(), hasLength(1));
     });
@@ -397,6 +457,37 @@ void main() {
       await a.sync();
     }
 
+    test(
+      'offline edits to different fields on A and B both reach the server',
+      () async {
+        // Both phones go offline and edit different fields of the same task.
+        clock.advance(const Duration(minutes: 1));
+        await a.repo.update(id, const TaskPatch(title: 'Buy oat milk'));
+        clock.advance(const Duration(minutes: 1));
+        await b.repo.update(id, const TaskPatch(priority: Priority.high));
+        final calls = server.pushCalls.length;
+
+        // Back online: A syncs first, then B.
+        await a.sync();
+        final reportB = await b.sync();
+
+        final row = server.rows[id]!;
+        expect(row['title'], 'Buy oat milk');
+        expect(row['priority'], Priority.high.index);
+        expect(row['version'], 3);
+        // B's first push was rejected as stale (base 1 < 2), merged, re-pushed.
+        expect(
+          server.pushCalls
+              .skip(calls)
+              .map((c) => (c.task['title'], c.baseVersion)),
+          [('Buy oat milk', 1), ('Buy milk', 1), ('Buy oat milk', 2)],
+        );
+        expect(reportB.failed, 0);
+        expect(reportB.conflicts, 0);
+        expect(await b.queue(), isEmpty);
+      },
+    );
+
     test('different fields: both edits survive on every device', () async {
       clock.advance(const Duration(minutes: 1));
       await a.repo.update(id, const TaskPatch(title: 'Buy oat milk'));
@@ -484,5 +575,91 @@ void main() {
         );
       },
     );
+  });
+
+  group('lease across isolates', () {
+    // Two engines on one database file stand in for the app isolate and the
+    // WorkManager isolate: they share only what is in SQLite.
+    test('a second engine skips while the first holds the lease', () async {
+      await a.repo.create(title: 'Once');
+      final background = SyncEngine(a.db, server, clock: clock.now);
+      SyncReport? concurrent;
+      server.onPush = (_) async => concurrent ??= await background.sync();
+
+      final report = await a.sync();
+
+      expect(report.pushed, 1);
+      expect(concurrent!.skipped, 'another sync is running');
+      expect(server.pushCalls, hasLength(1));
+      expect(
+        await a.db.readState(SyncEngine.leaseKey),
+        isNull,
+        reason: 'released at the end of the run',
+      );
+      expect((await background.sync()).skipped, isNull);
+    });
+
+    test('a lease left by a killed isolate expires', () async {
+      await a.repo.create(title: 'Orphaned lease');
+      await a.db.writeState(
+        SyncEngine.leaseKey,
+        jsonEncode({
+          'owner': 'dead-isolate',
+          'expires': clock.t
+              .add(const Duration(minutes: 1))
+              .millisecondsSinceEpoch,
+        }),
+      );
+
+      expect((await a.sync()).skipped, 'another sync is running');
+      clock.advance(const Duration(minutes: 2));
+      final report = await a.sync();
+      expect(report.skipped, isNull);
+      expect(report.pushed, 1);
+    });
+
+    test(
+      'a lease from the future (clock moved back) is not honoured',
+      () async {
+        await a.db.writeState(
+          SyncEngine.leaseKey,
+          jsonEncode({
+            'owner': 'other',
+            'expires': clock.t
+                .add(const Duration(days: 1))
+                .millisecondsSinceEpoch,
+          }),
+        );
+        expect((await a.sync()).skipped, isNull);
+      },
+    );
+
+    test('a run that loses its lease stops instead of racing', () async {
+      final t1 = await a.repo.create(title: 'One');
+      await a.repo.create(title: 'Two');
+      server.onPush = (_) async {
+        // Our lease was taken over (we were too slow to renew).
+        await a.db.writeState(
+          SyncEngine.leaseKey,
+          jsonEncode({
+            'owner': 'other',
+            'expires': clock.t
+                .add(const Duration(minutes: 2))
+                .millisecondsSinceEpoch,
+          }),
+        );
+      };
+
+      final report = await a.sync();
+
+      expect(report.error, 'lost the sync lease to another run');
+      expect(server.pushCalls.map((c) => c.task['id']), [t1]);
+      expect((await a.queue()).single.status, OpStatus.pending);
+      expect(
+        await a.db.readState(SyncEngine.leaseKey),
+        contains('other'),
+        reason: "never deletes someone else's lease",
+      );
+    });
   });
 }
