@@ -154,6 +154,16 @@ class AppDatabase extends _$AppDatabase {
     },
   );
 
+  /// Removes everything tied to the signed-in account (on sign-out), in one
+  /// transaction. Otherwise the next account to sign in on this device would
+  /// pull into, and push from, the previous account's local data.
+  Future<void> clearAccountData() => transaction(() async {
+    await delete(syncQueue).go();
+    await delete(tasks).go();
+    await delete(syncLog).go();
+    await delete(syncState).go();
+  });
+
   Future<String?> readState(String key) async {
     final row = await (select(
       syncState,

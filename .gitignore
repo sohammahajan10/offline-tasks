@@ -53,3 +53,6 @@ app.*.map.json
 
 # Gradle output from the Android project dir
 /android/build/
+
+# Node tooling (tool/sqltest)
+node_modules/

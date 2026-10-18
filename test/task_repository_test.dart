@@ -288,6 +288,22 @@ void main() {
   });
 
   test(
+    'clearAccountData wipes tasks, queue, log and cursor together',
+    () async {
+      await repo.create(title: 'Previous account');
+      await db.writeState('pull_cursor:user-1', '2026-10-18T09:00:00.000Z');
+      await db.log(LogLevel.info, 'Uploaded “Previous account”');
+
+      await db.clearAccountData();
+
+      expect(await db.select(db.tasks).get(), isEmpty);
+      expect(await queue(), isEmpty);
+      expect(await db.select(db.syncLog).get(), isEmpty);
+      expect(await db.readState('pull_cursor:user-1'), isNull);
+    },
+  );
+
+  test(
     'tasks and queue survive closing and reopening the database file',
     () async {
       final dir = await Directory.systemTemp.createTemp('offline_tasks_');

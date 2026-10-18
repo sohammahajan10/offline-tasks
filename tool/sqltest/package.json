@@ -1,0 +1,8 @@
+{
+  "name": "offline-tasks-sqltest",
+  "private": true,
+  "type": "module",
+  "description": "Runs supabase/migrations + supabase/tests against PGlite (Postgres in WASM) with a stub of Supabase's auth schema.",
+  "scripts": { "test": "node run.mjs" },
+  "dependencies": { "@electric-sql/pglite": "0.5.8" }
+}
