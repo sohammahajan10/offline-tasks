@@ -165,11 +165,16 @@ class TaskRepository {
     final opType = opTypeFor(row);
     final payload = jsonEncode(rowToWire(row));
     final waiting =
-        await (_db.select(_db.syncQueue)..where(
-              (q) =>
-                  q.taskId.equals(taskId) &
-                  q.status.isIn([OpStatus.pending, OpStatus.failed]),
-            ))
+        await (_db.select(_db.syncQueue)
+              ..where(
+                (q) =>
+                    q.taskId.equals(taskId) &
+                    q.status.isIn([OpStatus.pending, OpStatus.failed]),
+              )
+              // Normally at most one. After a crash, a recovered in-flight entry
+              // can sit in front of a newer one: merge into the newest.
+              ..orderBy([(q) => OrderingTerm.desc(q.seq)])
+              ..limit(1))
             .getSingleOrNull();
 
     if (waiting == null) {
@@ -202,13 +207,6 @@ class TaskRepository {
       ),
     );
   }
-
-  /// The op type follows from the row's state, so coalesced edits can't
-  /// lose it: a tombstone is a delete, a task the server has never seen is
-  /// a create, anything else is an update.
-  static String opTypeFor(TaskRow row) => row.isDeleted
-      ? OpType.delete
-      : (row.version == 0 ? OpType.create : OpType.update);
 
   static String _validTitle(String title) {
     final t = title.trim();

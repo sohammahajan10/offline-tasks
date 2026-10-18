@@ -102,6 +102,26 @@ String? normalizeTimestamp(Object? value) {
   return dt.toUtc().toIso8601String();
 }
 
+/// Brings any representation of a task (local row, queue payload, Postgres
+/// row) to one canonical wire map, so equal values always compare equal.
+Map<String, Object?> canonicalWire(Map<String, Object?> raw) => {
+  'id': raw['id'],
+  TaskFields.title: raw[TaskFields.title] ?? '',
+  TaskFields.notes: raw[TaskFields.notes] ?? '',
+  TaskFields.priority: (raw[TaskFields.priority] as num?)?.toInt() ?? 1,
+  TaskFields.dueAt: normalizeTimestamp(raw[TaskFields.dueAt]),
+  TaskFields.category: raw[TaskFields.category],
+  TaskFields.tags: [
+    for (final t in (raw[TaskFields.tags] as List?) ?? const []) t.toString(),
+  ],
+  TaskFields.completed: raw[TaskFields.completed] ?? false,
+  TaskFields.isDeleted: raw[TaskFields.isDeleted] ?? false,
+  'version': (raw['version'] as num?)?.toInt() ?? 0,
+  'updated_at': normalizeTimestamp(raw['updated_at']),
+  if (raw['server_updated_at'] != null)
+    'server_updated_at': normalizeTimestamp(raw['server_updated_at']),
+};
+
 String encodeTags(List<String> tags) => jsonEncode(tags);
 
 List<String> decodeTags(String json) =>

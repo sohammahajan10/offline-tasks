@@ -28,6 +28,10 @@ class Tasks extends Table {
   /// True while a change is waiting in [SyncQueue].
   BoolColumn get dirty => boolean().withDefault(const Constant(false))();
 
+  /// Wire JSON of the last server state this row was reconciled with: the
+  /// common ancestor for the three-way field merge. Null until first synced.
+  TextColumn get serverSnapshot => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -71,7 +75,35 @@ abstract final class OpStatus {
   static const failed = 'failed';
 }
 
-@DriftDatabase(tables: [Tasks, SyncQueue])
+/// Human-readable sync history, shown on the Sync log screen.
+@DataClassName('SyncLogEntry')
+class SyncLog extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  DateTimeColumn get at => dateTime()();
+  TextColumn get level => text()(); // see LogLevel
+  TextColumn get message => text()();
+  TextColumn get taskId => text().nullable()();
+}
+
+abstract final class LogLevel {
+  static const info = 'info';
+
+  /// Both sides changed the same field; resolved by last-writer-wins.
+  static const conflict = 'conflict';
+  static const error = 'error';
+}
+
+/// Small key-value store for sync bookkeeping (the pull cursor).
+@DataClassName('SyncStateEntry')
+class SyncState extends Table {
+  TextColumn get key => text()();
+  TextColumn get value => text()();
+
+  @override
+  Set<Column> get primaryKey => {key};
+}
+
+@DriftDatabase(tables: [Tasks, SyncQueue, SyncLog, SyncState])
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? openDefault());
 
@@ -81,7 +113,7 @@ class AppDatabase extends _$AppDatabase {
   // add the `fromNToM` step below and fill in the generated data test in
   // test/drift/. Never edit an old step: devices may already have run it.
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -106,6 +138,13 @@ class AppDatabase extends _$AppDatabase {
         );
         await m.create(schema.idxQueueStatus);
       },
+      // v3: sync engine bookkeeping. Only additions, so no data moves.
+      // Existing rows get a null snapshot and are treated as never synced.
+      from2To3: (m, schema) async {
+        await m.addColumn(schema.tasks, schema.tasks.serverSnapshot);
+        await m.createTable(schema.syncLog);
+        await m.createTable(schema.syncState);
+      },
     ),
     beforeOpen: (details) async {
       // The foreground app and the WorkManager isolate can open the same file.
@@ -113,5 +152,30 @@ class AppDatabase extends _$AppDatabase {
       await customStatement('PRAGMA busy_timeout = 5000');
       await customStatement('PRAGMA foreign_keys = ON');
     },
+  );
+
+  Future<String?> readState(String key) async {
+    final row = await (select(
+      syncState,
+    )..where((s) => s.key.equals(key))).getSingleOrNull();
+    return row?.value;
+  }
+
+  Future<void> writeState(String key, String value) =>
+      into(syncState)
+          .insertOnConflictUpdate(SyncStateEntry(key: key, value: value));
+
+  Future<void> log(
+    String level,
+    String message, {
+    String? taskId,
+    DateTime? at,
+  }) => into(syncLog).insert(
+    SyncLogCompanion.insert(
+      at: at ?? DateTime.now(),
+      level: level,
+      message: message,
+      taskId: Value(taskId),
+    ),
   );
 }

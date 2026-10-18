@@ -144,6 +144,17 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _serverSnapshotMeta = const VerificationMeta(
+    'serverSnapshot',
+  );
+  @override
+  late final GeneratedColumn<String> serverSnapshot = GeneratedColumn<String>(
+    'server_snapshot',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -158,6 +169,7 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
     version,
     updatedAt,
     dirty,
+    serverSnapshot,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -246,6 +258,15 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
         dirty.isAcceptableOrUnknown(data['dirty']!, _dirtyMeta),
       );
     }
+    if (data.containsKey('server_snapshot')) {
+      context.handle(
+        _serverSnapshotMeta,
+        serverSnapshot.isAcceptableOrUnknown(
+          data['server_snapshot']!,
+          _serverSnapshotMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -303,6 +324,10 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
         DriftSqlType.bool,
         data['${effectivePrefix}dirty'],
       )!,
+      serverSnapshot: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}server_snapshot'],
+      ),
     );
   }
 
@@ -329,6 +354,10 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
 
   /// True while a change is waiting in [SyncQueue].
   final bool dirty;
+
+  /// Wire JSON of the last server state this row was reconciled with: the
+  /// common ancestor for the three-way field merge. Null until first synced.
+  final String? serverSnapshot;
   const TaskRow({
     required this.id,
     required this.title,
@@ -342,6 +371,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     required this.version,
     required this.updatedAt,
     required this.dirty,
+    this.serverSnapshot,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -362,6 +392,9 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     map['version'] = Variable<int>(version);
     map['updated_at'] = Variable<DateTime>(updatedAt);
     map['dirty'] = Variable<bool>(dirty);
+    if (!nullToAbsent || serverSnapshot != null) {
+      map['server_snapshot'] = Variable<String>(serverSnapshot);
+    }
     return map;
   }
 
@@ -383,6 +416,9 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       version: Value(version),
       updatedAt: Value(updatedAt),
       dirty: Value(dirty),
+      serverSnapshot: serverSnapshot == null && nullToAbsent
+          ? const Value.absent()
+          : Value(serverSnapshot),
     );
   }
 
@@ -404,6 +440,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       version: serializer.fromJson<int>(json['version']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
       dirty: serializer.fromJson<bool>(json['dirty']),
+      serverSnapshot: serializer.fromJson<String?>(json['serverSnapshot']),
     );
   }
   @override
@@ -422,6 +459,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       'version': serializer.toJson<int>(version),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
       'dirty': serializer.toJson<bool>(dirty),
+      'serverSnapshot': serializer.toJson<String?>(serverSnapshot),
     };
   }
 
@@ -438,6 +476,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     int? version,
     DateTime? updatedAt,
     bool? dirty,
+    Value<String?> serverSnapshot = const Value.absent(),
   }) => TaskRow(
     id: id ?? this.id,
     title: title ?? this.title,
@@ -451,6 +490,9 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     version: version ?? this.version,
     updatedAt: updatedAt ?? this.updatedAt,
     dirty: dirty ?? this.dirty,
+    serverSnapshot: serverSnapshot.present
+        ? serverSnapshot.value
+        : this.serverSnapshot,
   );
   TaskRow copyWithCompanion(TasksCompanion data) {
     return TaskRow(
@@ -466,6 +508,9 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       version: data.version.present ? data.version.value : this.version,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
       dirty: data.dirty.present ? data.dirty.value : this.dirty,
+      serverSnapshot: data.serverSnapshot.present
+          ? data.serverSnapshot.value
+          : this.serverSnapshot,
     );
   }
 
@@ -483,7 +528,8 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
           ..write('isDeleted: $isDeleted, ')
           ..write('version: $version, ')
           ..write('updatedAt: $updatedAt, ')
-          ..write('dirty: $dirty')
+          ..write('dirty: $dirty, ')
+          ..write('serverSnapshot: $serverSnapshot')
           ..write(')'))
         .toString();
   }
@@ -502,6 +548,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     version,
     updatedAt,
     dirty,
+    serverSnapshot,
   );
   @override
   bool operator ==(Object other) =>
@@ -518,7 +565,8 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
           other.isDeleted == this.isDeleted &&
           other.version == this.version &&
           other.updatedAt == this.updatedAt &&
-          other.dirty == this.dirty);
+          other.dirty == this.dirty &&
+          other.serverSnapshot == this.serverSnapshot);
 }
 
 class TasksCompanion extends UpdateCompanion<TaskRow> {
@@ -534,6 +582,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
   final Value<int> version;
   final Value<DateTime> updatedAt;
   final Value<bool> dirty;
+  final Value<String?> serverSnapshot;
   final Value<int> rowid;
   const TasksCompanion({
     this.id = const Value.absent(),
@@ -548,6 +597,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     this.version = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.dirty = const Value.absent(),
+    this.serverSnapshot = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TasksCompanion.insert({
@@ -563,6 +613,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     this.version = const Value.absent(),
     required DateTime updatedAt,
     this.dirty = const Value.absent(),
+    this.serverSnapshot = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        title = Value(title),
@@ -580,6 +631,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     Expression<int>? version,
     Expression<DateTime>? updatedAt,
     Expression<bool>? dirty,
+    Expression<String>? serverSnapshot,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -595,6 +647,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
       if (version != null) 'version': version,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (dirty != null) 'dirty': dirty,
+      if (serverSnapshot != null) 'server_snapshot': serverSnapshot,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -612,6 +665,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     Value<int>? version,
     Value<DateTime>? updatedAt,
     Value<bool>? dirty,
+    Value<String?>? serverSnapshot,
     Value<int>? rowid,
   }) {
     return TasksCompanion(
@@ -627,6 +681,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
       version: version ?? this.version,
       updatedAt: updatedAt ?? this.updatedAt,
       dirty: dirty ?? this.dirty,
+      serverSnapshot: serverSnapshot ?? this.serverSnapshot,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -670,6 +725,9 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     if (dirty.present) {
       map['dirty'] = Variable<bool>(dirty.value);
     }
+    if (serverSnapshot.present) {
+      map['server_snapshot'] = Variable<String>(serverSnapshot.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -691,6 +749,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
           ..write('version: $version, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('dirty: $dirty, ')
+          ..write('serverSnapshot: $serverSnapshot, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1311,11 +1370,559 @@ class SyncQueueCompanion extends UpdateCompanion<SyncOp> {
   }
 }
 
+class $SyncLogTable extends SyncLog
+    with TableInfo<$SyncLogTable, SyncLogEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SyncLogTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _atMeta = const VerificationMeta('at');
+  @override
+  late final GeneratedColumn<DateTime> at = GeneratedColumn<DateTime>(
+    'at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _levelMeta = const VerificationMeta('level');
+  @override
+  late final GeneratedColumn<String> level = GeneratedColumn<String>(
+    'level',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _messageMeta = const VerificationMeta(
+    'message',
+  );
+  @override
+  late final GeneratedColumn<String> message = GeneratedColumn<String>(
+    'message',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _taskIdMeta = const VerificationMeta('taskId');
+  @override
+  late final GeneratedColumn<String> taskId = GeneratedColumn<String>(
+    'task_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [id, at, level, message, taskId];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'sync_log';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<SyncLogEntry> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('at')) {
+      context.handle(_atMeta, at.isAcceptableOrUnknown(data['at']!, _atMeta));
+    } else if (isInserting) {
+      context.missing(_atMeta);
+    }
+    if (data.containsKey('level')) {
+      context.handle(
+        _levelMeta,
+        level.isAcceptableOrUnknown(data['level']!, _levelMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_levelMeta);
+    }
+    if (data.containsKey('message')) {
+      context.handle(
+        _messageMeta,
+        message.isAcceptableOrUnknown(data['message']!, _messageMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_messageMeta);
+    }
+    if (data.containsKey('task_id')) {
+      context.handle(
+        _taskIdMeta,
+        taskId.isAcceptableOrUnknown(data['task_id']!, _taskIdMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  SyncLogEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return SyncLogEntry(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      at: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}at'],
+      )!,
+      level: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}level'],
+      )!,
+      message: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}message'],
+      )!,
+      taskId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}task_id'],
+      ),
+    );
+  }
+
+  @override
+  $SyncLogTable createAlias(String alias) {
+    return $SyncLogTable(attachedDatabase, alias);
+  }
+}
+
+class SyncLogEntry extends DataClass implements Insertable<SyncLogEntry> {
+  final int id;
+  final DateTime at;
+  final String level;
+  final String message;
+  final String? taskId;
+  const SyncLogEntry({
+    required this.id,
+    required this.at,
+    required this.level,
+    required this.message,
+    this.taskId,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['at'] = Variable<DateTime>(at);
+    map['level'] = Variable<String>(level);
+    map['message'] = Variable<String>(message);
+    if (!nullToAbsent || taskId != null) {
+      map['task_id'] = Variable<String>(taskId);
+    }
+    return map;
+  }
+
+  SyncLogCompanion toCompanion(bool nullToAbsent) {
+    return SyncLogCompanion(
+      id: Value(id),
+      at: Value(at),
+      level: Value(level),
+      message: Value(message),
+      taskId: taskId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(taskId),
+    );
+  }
+
+  factory SyncLogEntry.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return SyncLogEntry(
+      id: serializer.fromJson<int>(json['id']),
+      at: serializer.fromJson<DateTime>(json['at']),
+      level: serializer.fromJson<String>(json['level']),
+      message: serializer.fromJson<String>(json['message']),
+      taskId: serializer.fromJson<String?>(json['taskId']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'at': serializer.toJson<DateTime>(at),
+      'level': serializer.toJson<String>(level),
+      'message': serializer.toJson<String>(message),
+      'taskId': serializer.toJson<String?>(taskId),
+    };
+  }
+
+  SyncLogEntry copyWith({
+    int? id,
+    DateTime? at,
+    String? level,
+    String? message,
+    Value<String?> taskId = const Value.absent(),
+  }) => SyncLogEntry(
+    id: id ?? this.id,
+    at: at ?? this.at,
+    level: level ?? this.level,
+    message: message ?? this.message,
+    taskId: taskId.present ? taskId.value : this.taskId,
+  );
+  SyncLogEntry copyWithCompanion(SyncLogCompanion data) {
+    return SyncLogEntry(
+      id: data.id.present ? data.id.value : this.id,
+      at: data.at.present ? data.at.value : this.at,
+      level: data.level.present ? data.level.value : this.level,
+      message: data.message.present ? data.message.value : this.message,
+      taskId: data.taskId.present ? data.taskId.value : this.taskId,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SyncLogEntry(')
+          ..write('id: $id, ')
+          ..write('at: $at, ')
+          ..write('level: $level, ')
+          ..write('message: $message, ')
+          ..write('taskId: $taskId')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, at, level, message, taskId);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is SyncLogEntry &&
+          other.id == this.id &&
+          other.at == this.at &&
+          other.level == this.level &&
+          other.message == this.message &&
+          other.taskId == this.taskId);
+}
+
+class SyncLogCompanion extends UpdateCompanion<SyncLogEntry> {
+  final Value<int> id;
+  final Value<DateTime> at;
+  final Value<String> level;
+  final Value<String> message;
+  final Value<String?> taskId;
+  const SyncLogCompanion({
+    this.id = const Value.absent(),
+    this.at = const Value.absent(),
+    this.level = const Value.absent(),
+    this.message = const Value.absent(),
+    this.taskId = const Value.absent(),
+  });
+  SyncLogCompanion.insert({
+    this.id = const Value.absent(),
+    required DateTime at,
+    required String level,
+    required String message,
+    this.taskId = const Value.absent(),
+  }) : at = Value(at),
+       level = Value(level),
+       message = Value(message);
+  static Insertable<SyncLogEntry> custom({
+    Expression<int>? id,
+    Expression<DateTime>? at,
+    Expression<String>? level,
+    Expression<String>? message,
+    Expression<String>? taskId,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (at != null) 'at': at,
+      if (level != null) 'level': level,
+      if (message != null) 'message': message,
+      if (taskId != null) 'task_id': taskId,
+    });
+  }
+
+  SyncLogCompanion copyWith({
+    Value<int>? id,
+    Value<DateTime>? at,
+    Value<String>? level,
+    Value<String>? message,
+    Value<String?>? taskId,
+  }) {
+    return SyncLogCompanion(
+      id: id ?? this.id,
+      at: at ?? this.at,
+      level: level ?? this.level,
+      message: message ?? this.message,
+      taskId: taskId ?? this.taskId,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (at.present) {
+      map['at'] = Variable<DateTime>(at.value);
+    }
+    if (level.present) {
+      map['level'] = Variable<String>(level.value);
+    }
+    if (message.present) {
+      map['message'] = Variable<String>(message.value);
+    }
+    if (taskId.present) {
+      map['task_id'] = Variable<String>(taskId.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SyncLogCompanion(')
+          ..write('id: $id, ')
+          ..write('at: $at, ')
+          ..write('level: $level, ')
+          ..write('message: $message, ')
+          ..write('taskId: $taskId')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $SyncStateTable extends SyncState
+    with TableInfo<$SyncStateTable, SyncStateEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SyncStateTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _keyMeta = const VerificationMeta('key');
+  @override
+  late final GeneratedColumn<String> key = GeneratedColumn<String>(
+    'key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _valueMeta = const VerificationMeta('value');
+  @override
+  late final GeneratedColumn<String> value = GeneratedColumn<String>(
+    'value',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [key, value];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'sync_state';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<SyncStateEntry> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('key')) {
+      context.handle(
+        _keyMeta,
+        key.isAcceptableOrUnknown(data['key']!, _keyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_keyMeta);
+    }
+    if (data.containsKey('value')) {
+      context.handle(
+        _valueMeta,
+        value.isAcceptableOrUnknown(data['value']!, _valueMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_valueMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {key};
+  @override
+  SyncStateEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return SyncStateEntry(
+      key: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}key'],
+      )!,
+      value: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}value'],
+      )!,
+    );
+  }
+
+  @override
+  $SyncStateTable createAlias(String alias) {
+    return $SyncStateTable(attachedDatabase, alias);
+  }
+}
+
+class SyncStateEntry extends DataClass implements Insertable<SyncStateEntry> {
+  final String key;
+  final String value;
+  const SyncStateEntry({required this.key, required this.value});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['key'] = Variable<String>(key);
+    map['value'] = Variable<String>(value);
+    return map;
+  }
+
+  SyncStateCompanion toCompanion(bool nullToAbsent) {
+    return SyncStateCompanion(key: Value(key), value: Value(value));
+  }
+
+  factory SyncStateEntry.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return SyncStateEntry(
+      key: serializer.fromJson<String>(json['key']),
+      value: serializer.fromJson<String>(json['value']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'key': serializer.toJson<String>(key),
+      'value': serializer.toJson<String>(value),
+    };
+  }
+
+  SyncStateEntry copyWith({String? key, String? value}) =>
+      SyncStateEntry(key: key ?? this.key, value: value ?? this.value);
+  SyncStateEntry copyWithCompanion(SyncStateCompanion data) {
+    return SyncStateEntry(
+      key: data.key.present ? data.key.value : this.key,
+      value: data.value.present ? data.value.value : this.value,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SyncStateEntry(')
+          ..write('key: $key, ')
+          ..write('value: $value')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(key, value);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is SyncStateEntry &&
+          other.key == this.key &&
+          other.value == this.value);
+}
+
+class SyncStateCompanion extends UpdateCompanion<SyncStateEntry> {
+  final Value<String> key;
+  final Value<String> value;
+  final Value<int> rowid;
+  const SyncStateCompanion({
+    this.key = const Value.absent(),
+    this.value = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  SyncStateCompanion.insert({
+    required String key,
+    required String value,
+    this.rowid = const Value.absent(),
+  }) : key = Value(key),
+       value = Value(value);
+  static Insertable<SyncStateEntry> custom({
+    Expression<String>? key,
+    Expression<String>? value,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (key != null) 'key': key,
+      if (value != null) 'value': value,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  SyncStateCompanion copyWith({
+    Value<String>? key,
+    Value<String>? value,
+    Value<int>? rowid,
+  }) {
+    return SyncStateCompanion(
+      key: key ?? this.key,
+      value: value ?? this.value,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (key.present) {
+      map['key'] = Variable<String>(key.value);
+    }
+    if (value.present) {
+      map['value'] = Variable<String>(value.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SyncStateCompanion(')
+          ..write('key: $key, ')
+          ..write('value: $value, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
   late final $TasksTable tasks = $TasksTable(this);
   late final $SyncQueueTable syncQueue = $SyncQueueTable(this);
+  late final $SyncLogTable syncLog = $SyncLogTable(this);
+  late final $SyncStateTable syncState = $SyncStateTable(this);
   late final Index idxQueueTask = Index(
     'idx_queue_task',
     'CREATE INDEX idx_queue_task ON sync_queue (task_id)',
@@ -1331,6 +1938,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   List<DatabaseSchemaEntity> get allSchemaEntities => [
     tasks,
     syncQueue,
+    syncLog,
+    syncState,
     idxQueueTask,
     idxQueueStatus,
   ];
@@ -1352,6 +1961,7 @@ typedef $$TasksTableCreateCompanionBuilder = TasksCompanion Function({
   Value<int> version,
   required DateTime updatedAt,
   Value<bool> dirty,
+  Value<String?> serverSnapshot,
   Value<int> rowid,
 });
 typedef $$TasksTableUpdateCompanionBuilder = TasksCompanion Function({
@@ -1367,6 +1977,7 @@ typedef $$TasksTableUpdateCompanionBuilder = TasksCompanion Function({
   Value<int> version,
   Value<DateTime> updatedAt,
   Value<bool> dirty,
+  Value<String?> serverSnapshot,
   Value<int> rowid,
 });
 
@@ -1459,6 +2070,11 @@ class $$TasksTableFilterComposer extends Composer<_$AppDatabase, $TasksTable> {
 
   ColumnFilters<bool> get dirty => $composableBuilder(
     column: $table.dirty,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get serverSnapshot => $composableBuilder(
+    column: $table.serverSnapshot,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1556,6 +2172,11 @@ class $$TasksTableOrderingComposer
     column: $table.dirty,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get serverSnapshot => $composableBuilder(
+    column: $table.serverSnapshot,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$TasksTableAnnotationComposer
@@ -1602,6 +2223,11 @@ class $$TasksTableAnnotationComposer
 
   GeneratedColumn<bool> get dirty =>
       $composableBuilder(column: $table.dirty, builder: (column) => column);
+
+  GeneratedColumn<String> get serverSnapshot => $composableBuilder(
+    column: $table.serverSnapshot,
+    builder: (column) => column,
+  );
 
   Expression<T> syncQueueRefs<T extends Object>(
     Expression<T> Function($$SyncQueueTableAnnotationComposer a) f,
@@ -1669,6 +2295,7 @@ class $$TasksTableTableManager
                 Value<int> version = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
+                Value<String?> serverSnapshot = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TasksCompanion(
                 id: id,
@@ -1683,6 +2310,7 @@ class $$TasksTableTableManager
                 version: version,
                 updatedAt: updatedAt,
                 dirty: dirty,
+                serverSnapshot: serverSnapshot,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -1699,6 +2327,7 @@ class $$TasksTableTableManager
                 Value<int> version = const Value.absent(),
                 required DateTime updatedAt,
                 Value<bool> dirty = const Value.absent(),
+                Value<String?> serverSnapshot = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TasksCompanion.insert(
                 id: id,
@@ -1713,6 +2342,7 @@ class $$TasksTableTableManager
                 version: version,
                 updatedAt: updatedAt,
                 dirty: dirty,
+                serverSnapshot: serverSnapshot,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -2171,6 +2801,347 @@ typedef $$SyncQueueTableProcessedTableManager =
       SyncOp,
       PrefetchHooks Function({bool taskId})
     >;
+typedef $$SyncLogTableCreateCompanionBuilder = SyncLogCompanion Function({
+  Value<int> id,
+  required DateTime at,
+  required String level,
+  required String message,
+  Value<String?> taskId,
+});
+typedef $$SyncLogTableUpdateCompanionBuilder = SyncLogCompanion Function({
+  Value<int> id,
+  Value<DateTime> at,
+  Value<String> level,
+  Value<String> message,
+  Value<String?> taskId,
+});
+
+class $$SyncLogTableFilterComposer
+    extends Composer<_$AppDatabase, $SyncLogTable> {
+  $$SyncLogTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get at => $composableBuilder(
+    column: $table.at,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get level => $composableBuilder(
+    column: $table.level,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get message => $composableBuilder(
+    column: $table.message,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get taskId => $composableBuilder(
+    column: $table.taskId,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$SyncLogTableOrderingComposer
+    extends Composer<_$AppDatabase, $SyncLogTable> {
+  $$SyncLogTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get at => $composableBuilder(
+    column: $table.at,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get level => $composableBuilder(
+    column: $table.level,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get message => $composableBuilder(
+    column: $table.message,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get taskId => $composableBuilder(
+    column: $table.taskId,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$SyncLogTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SyncLogTable> {
+  $$SyncLogTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get at =>
+      $composableBuilder(column: $table.at, builder: (column) => column);
+
+  GeneratedColumn<String> get level =>
+      $composableBuilder(column: $table.level, builder: (column) => column);
+
+  GeneratedColumn<String> get message =>
+      $composableBuilder(column: $table.message, builder: (column) => column);
+
+  GeneratedColumn<String> get taskId =>
+      $composableBuilder(column: $table.taskId, builder: (column) => column);
+}
+
+class $$SyncLogTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $SyncLogTable,
+          SyncLogEntry,
+          $$SyncLogTableFilterComposer,
+          $$SyncLogTableOrderingComposer,
+          $$SyncLogTableAnnotationComposer,
+          $$SyncLogTableCreateCompanionBuilder,
+          $$SyncLogTableUpdateCompanionBuilder,
+          (
+            SyncLogEntry,
+            BaseReferences<_$AppDatabase, $SyncLogTable, SyncLogEntry>,
+          ),
+          SyncLogEntry,
+          PrefetchHooks Function()
+        > {
+  $$SyncLogTableTableManager(_$AppDatabase db, $SyncLogTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SyncLogTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SyncLogTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SyncLogTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<DateTime> at = const Value.absent(),
+                Value<String> level = const Value.absent(),
+                Value<String> message = const Value.absent(),
+                Value<String?> taskId = const Value.absent(),
+              }) => SyncLogCompanion(
+                id: id,
+                at: at,
+                level: level,
+                message: message,
+                taskId: taskId,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                required DateTime at,
+                required String level,
+                required String message,
+                Value<String?> taskId = const Value.absent(),
+              }) => SyncLogCompanion.insert(
+                id: id,
+                at: at,
+                level: level,
+                message: message,
+                taskId: taskId,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$SyncLogTable, SyncLogEntry>(table),
+                  BaseReferences<_$AppDatabase, $SyncLogTable, SyncLogEntry>(
+                    db,
+                    table,
+                    e,
+                  ),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$SyncLogTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $SyncLogTable,
+      SyncLogEntry,
+      $$SyncLogTableFilterComposer,
+      $$SyncLogTableOrderingComposer,
+      $$SyncLogTableAnnotationComposer,
+      $$SyncLogTableCreateCompanionBuilder,
+      $$SyncLogTableUpdateCompanionBuilder,
+      (
+        SyncLogEntry,
+        BaseReferences<_$AppDatabase, $SyncLogTable, SyncLogEntry>,
+      ),
+      SyncLogEntry,
+      PrefetchHooks Function()
+    >;
+typedef $$SyncStateTableCreateCompanionBuilder = SyncStateCompanion Function({
+  required String key,
+  required String value,
+  Value<int> rowid,
+});
+typedef $$SyncStateTableUpdateCompanionBuilder = SyncStateCompanion Function({
+  Value<String> key,
+  Value<String> value,
+  Value<int> rowid,
+});
+
+class $$SyncStateTableFilterComposer
+    extends Composer<_$AppDatabase, $SyncStateTable> {
+  $$SyncStateTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get key => $composableBuilder(
+    column: $table.key,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get value => $composableBuilder(
+    column: $table.value,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$SyncStateTableOrderingComposer
+    extends Composer<_$AppDatabase, $SyncStateTable> {
+  $$SyncStateTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get key => $composableBuilder(
+    column: $table.key,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get value => $composableBuilder(
+    column: $table.value,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$SyncStateTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SyncStateTable> {
+  $$SyncStateTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get key =>
+      $composableBuilder(column: $table.key, builder: (column) => column);
+
+  GeneratedColumn<String> get value =>
+      $composableBuilder(column: $table.value, builder: (column) => column);
+}
+
+class $$SyncStateTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $SyncStateTable,
+          SyncStateEntry,
+          $$SyncStateTableFilterComposer,
+          $$SyncStateTableOrderingComposer,
+          $$SyncStateTableAnnotationComposer,
+          $$SyncStateTableCreateCompanionBuilder,
+          $$SyncStateTableUpdateCompanionBuilder,
+          (
+            SyncStateEntry,
+            BaseReferences<_$AppDatabase, $SyncStateTable, SyncStateEntry>,
+          ),
+          SyncStateEntry,
+          PrefetchHooks Function()
+        > {
+  $$SyncStateTableTableManager(_$AppDatabase db, $SyncStateTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SyncStateTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SyncStateTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SyncStateTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> key = const Value.absent(),
+            Value<String> value = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) => SyncStateCompanion(key: key, value: value, rowid: rowid),
+          createCompanionCallback: ({
+            required String key,
+            required String value,
+            Value<int> rowid = const Value.absent(),
+          }) => SyncStateCompanion.insert(key: key, value: value, rowid: rowid),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$SyncStateTable, SyncStateEntry>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $SyncStateTable,
+                    SyncStateEntry
+                  >(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$SyncStateTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $SyncStateTable,
+      SyncStateEntry,
+      $$SyncStateTableFilterComposer,
+      $$SyncStateTableOrderingComposer,
+      $$SyncStateTableAnnotationComposer,
+      $$SyncStateTableCreateCompanionBuilder,
+      $$SyncStateTableUpdateCompanionBuilder,
+      (
+        SyncStateEntry,
+        BaseReferences<_$AppDatabase, $SyncStateTable, SyncStateEntry>,
+      ),
+      SyncStateEntry,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -2179,4 +3150,8 @@ class $AppDatabaseManager {
       $$TasksTableTableManager(_db, _db.tasks);
   $$SyncQueueTableTableManager get syncQueue =>
       $$SyncQueueTableTableManager(_db, _db.syncQueue);
+  $$SyncLogTableTableManager get syncLog =>
+      $$SyncLogTableTableManager(_db, _db.syncLog);
+  $$SyncStateTableTableManager get syncState =>
+      $$SyncStateTableTableManager(_db, _db.syncState);
 }

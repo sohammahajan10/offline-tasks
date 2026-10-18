@@ -9,6 +9,7 @@ import 'generated/schema.dart';
 
 import 'generated/schema_v1.dart' as v1;
 import 'generated/schema_v2.dart' as v2;
+import 'generated/schema_v3.dart' as v3;
 
 void main() {
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
@@ -92,10 +93,7 @@ void main() {
       },
       validateItems: (newDb) async {
         final tasks = await newDb.select(newDb.tasks).get();
-        expect(tasks.map((t) => (t.id, t.isDeleted)), [
-          ('a', 0),
-          ('b', 1),
-        ]);
+        expect(tasks.map((t) => (t.id, t.isDeleted)), [('a', 0), ('b', 1)]);
         final queue = await (newDb.select(
           newDb.syncQueue,
         )..orderBy([(q) => OrderingTerm.asc(q.seq)])).get();
@@ -144,5 +142,47 @@ void main() {
     expect(queue.map((q) => q.opId), ['op-old', 'op-new']);
     await db.close();
     await old.close();
+  });
+
+  test('v2 to v3 keeps tasks and queue; snapshots start empty', () async {
+    await verifier.testWithDataIntegrity(
+      oldVersion: 2,
+      newVersion: 3,
+      createOld: v2.DatabaseAtV2.new,
+      createNew: v3.DatabaseAtV3.new,
+      openTestedDatabase: AppDatabase.new,
+      createItems: (batch, oldDb) {
+        batch.insert(
+          oldDb.tasks,
+          v2.TasksCompanion.insert(
+            id: 'a',
+            title: 'Kept',
+            updatedAt: '2026-10-18T09:00:00.000Z',
+            version: const Value(4),
+          ),
+        );
+        batch.insert(
+          oldDb.syncQueue,
+          v2.SyncQueueCompanion.insert(
+            opId: 'op-a',
+            taskId: 'a',
+            opType: 'update',
+            payloadJson: '{}',
+            baseVersion: 4,
+          ),
+        );
+      },
+      validateItems: (newDb) async {
+        final task = await newDb.select(newDb.tasks).getSingle();
+        expect(
+          (task.title, task.version, task.serverSnapshot),
+          ('Kept', 4, null),
+        );
+        final op = await newDb.select(newDb.syncQueue).getSingle();
+        expect((op.opId, op.baseVersion), ('op-a', 4));
+        expect(await newDb.select(newDb.syncLog).get(), isEmpty);
+        expect(await newDb.select(newDb.syncState).get(), isEmpty);
+      },
+    );
   });
 }

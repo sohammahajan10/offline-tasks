@@ -1,3 +1,7 @@
+import 'dart:convert';
+
+import 'package:drift/drift.dart';
+
 import '../../domain/task.dart';
 import 'database.dart';
 
@@ -29,3 +33,33 @@ Map<String, Object?> rowToWire(TaskRow r) => {
   TaskFields.isDeleted: r.isDeleted,
   'updated_at': normalizeTimestamp(r.updatedAt),
 };
+
+/// Companion that sets a row's synced fields and `updated_at` from a
+/// canonical wire map.
+TasksCompanion wireToCompanion(Map<String, Object?> w) {
+  final due = w[TaskFields.dueAt] as String?;
+  return TasksCompanion(
+    title: Value(w[TaskFields.title] as String),
+    notes: Value(w[TaskFields.notes] as String),
+    priority: Value(w[TaskFields.priority] as int),
+    dueAt: Value(due == null ? null : DateTime.parse(due)),
+    category: Value(w[TaskFields.category] as String?),
+    tags: Value(encodeTags((w[TaskFields.tags] as List).cast<String>())),
+    completed: Value(w[TaskFields.completed] as bool),
+    isDeleted: Value(w[TaskFields.isDeleted] as bool),
+    updatedAt: Value(DateTime.parse(w['updated_at'] as String)),
+  );
+}
+
+String encodeSnapshot(Map<String, Object?> wire) => jsonEncode(wire);
+
+Map<String, Object?>? decodeSnapshot(String? json) => json == null
+    ? null
+    : canonicalWire(Map<String, Object?>.from(jsonDecode(json) as Map));
+
+/// The op type follows from the row's state, so merged edits can't lose it:
+/// a tombstone is a delete, a task the server has never seen is a create,
+/// anything else is an update.
+String opTypeFor(TaskRow row) => row.isDeleted
+    ? OpType.delete
+    : (row.version == 0 ? OpType.create : OpType.update);
