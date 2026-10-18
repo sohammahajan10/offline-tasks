@@ -1,6 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Sync with Supabase (release builds don't get INTERNET implicitly). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- connectivity_plus: detect when the network comes and goes. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <application
-        android:label="offline_tasks"
+        android:label="Offline Tasks"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

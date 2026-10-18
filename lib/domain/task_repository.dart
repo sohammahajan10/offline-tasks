@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:drift/drift.dart';
@@ -6,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import '../data/db/database.dart';
 import '../data/db/task_mapper.dart';
 import 'task.dart';
+import 'task_query.dart';
 
 /// All task writes go through here. Each one updates `tasks` and `sync_queue`
 /// in a single SQLite transaction, so a change can never exist without the
@@ -21,6 +23,10 @@ class TaskRepository {
   final AppDatabase _db;
   final DateTime Function() _clock;
   final String Function() _newId;
+  final _writes = StreamController<void>.broadcast();
+
+  /// Fires after every committed local write, so sync can start promptly.
+  Stream<void> get localWrites => _writes.stream;
 
   // ---------------------------------------------------------------- reads
 
@@ -56,6 +62,83 @@ class TaskRepository {
     )..addColumns([count])).map((r) => r.read(count)!).watchSingle();
   }
 
+  /// Visible (non-deleted) tasks matching [query], in its sort order.
+  Stream<List<TaskItem>> watchTasks(TaskQuery query) {
+    final q = _db.select(_db.tasks)..where((t) => t.isDeleted.equals(false));
+
+    final search = query.search.trim();
+    if (search.isNotEmpty) {
+      // LIKE is case-insensitive for ASCII in SQLite. % and _ in the user's
+      // text are escaped so they match literally.
+      final pattern =
+          '%${search.replaceAllMapped(RegExp(r'[\\%_]'), (m) => '\\${m[0]}')}%';
+      q.where(
+        (t) =>
+            t.title.like(pattern, escapeChar: r'\') |
+            t.notes.like(pattern, escapeChar: r'\') |
+            t.category.like(pattern, escapeChar: r'\') |
+            t.tags.like(pattern, escapeChar: r'\'),
+      );
+    }
+    switch (query.status) {
+      case StatusFilter.all:
+        break;
+      case StatusFilter.pending:
+        q.where((t) => t.completed.equals(false));
+      case StatusFilter.done:
+        q.where((t) => t.completed.equals(true));
+    }
+    if (query.priority case final p?) {
+      q.where((t) => t.priority.equals(p.index));
+    }
+    if (query.category case final c?) {
+      q.where((t) => t.category.equals(c));
+    }
+
+    OrderingTerm due($TasksTable t) => OrderingTerm(
+      expression: t.dueAt,
+      mode: OrderingMode.asc,
+      nulls: NullsOrder.last,
+    );
+    q.orderBy(switch (query.sort) {
+      TaskSort.smart => [
+        (t) => OrderingTerm.asc(t.completed),
+        due,
+        (t) => OrderingTerm.desc(t.priority),
+        (t) => OrderingTerm.desc(t.updatedAt),
+      ],
+      TaskSort.dueDate => [due, (t) => OrderingTerm.desc(t.priority)],
+      TaskSort.priority => [(t) => OrderingTerm.desc(t.priority), due],
+      TaskSort.recent => [(t) => OrderingTerm.desc(t.updatedAt)],
+    });
+    return q.map(rowToItem).watch();
+  }
+
+  /// Distinct categories in use, for filters and autocomplete.
+  Stream<List<String>> watchCategories() {
+    final q = _db.selectOnly(_db.tasks, distinct: true)
+      ..addColumns([_db.tasks.category])
+      ..where(
+        _db.tasks.isDeleted.equals(false) & _db.tasks.category.isNotNull(),
+      )
+      ..orderBy([OrderingTerm.asc(_db.tasks.category)]);
+    return q.map((r) => r.read(_db.tasks.category)!).watch();
+  }
+
+  /// Sync badge per task that has queued changes. Failed wins over pending.
+  Stream<Map<String, TaskSyncState>> watchSyncStates() =>
+      _db.select(_db.syncQueue).watch().map((ops) {
+        final states = <String, TaskSyncState>{};
+        for (final op in ops) {
+          if (op.status == OpStatus.failed) {
+            states[op.taskId] = TaskSyncState.failed;
+          } else {
+            states.putIfAbsent(op.taskId, () => TaskSyncState.pending);
+          }
+        }
+        return states;
+      });
+
   // --------------------------------------------------------------- writes
 
   /// Creates a task with a client-generated UUID and returns its id.
@@ -68,25 +151,30 @@ class TaskRepository {
     List<String> tags = const [],
   }) {
     final id = _newId();
-    return _db.transaction(() async {
-      await _db
-          .into(_db.tasks)
-          .insert(
-            TasksCompanion.insert(
-              id: id,
-              title: _validTitle(title),
-              notes: Value(notes.trim()),
-              priority: Value(priority.index),
-              dueAt: Value(dueAt),
-              category: Value(_blankToNull(category)),
-              tags: Value(encodeTags(_cleanTags(tags))),
-              updatedAt: _clock(),
-              dirty: const Value(true),
-            ),
-          );
-      await _enqueue(id);
-      return id;
-    });
+    return _db
+        .transaction(() async {
+          await _db
+              .into(_db.tasks)
+              .insert(
+                TasksCompanion.insert(
+                  id: id,
+                  title: _validTitle(title),
+                  notes: Value(notes.trim()),
+                  priority: Value(priority.index),
+                  dueAt: Value(dueAt),
+                  category: Value(_blankToNull(category)),
+                  tags: Value(encodeTags(_cleanTags(tags))),
+                  updatedAt: _clock(),
+                  dirty: const Value(true),
+                ),
+              );
+          await _enqueue(id);
+          return id;
+        })
+        .then((id) {
+          _writes.add(null);
+          return id;
+        });
   }
 
   Future<void> update(String id, TaskPatch patch) => _write(
@@ -126,8 +214,8 @@ class TaskRepository {
 
   // ------------------------------------------------------------ internals
 
-  Future<void> _write(String id, TasksCompanion changes) =>
-      _db.transaction(() async {
+  Future<void> _write(String id, TasksCompanion changes) => _db
+      .transaction(() async {
         final updated =
             await (_db.update(_db.tasks)..where((t) => t.id.equals(id))).write(
               changes.copyWith(
@@ -137,7 +225,8 @@ class TaskRepository {
             );
         if (updated == 0) throw StateError('Task $id not found');
         await _enqueue(id);
-      });
+      })
+      .then((_) => _writes.add(null));
 
   /// Adds or refreshes the task's outbox entry. Must run inside a transaction.
   ///

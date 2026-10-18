@@ -1,16 +1,38 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-void main() {
-  runApp(const MainApp());
-}
+import 'data/api/supabase_config.dart';
+import 'data/db/database.dart';
+import 'data/sync/background_sync.dart';
+import 'presentation/app.dart';
+import 'presentation/providers.dart';
 
-class MainApp extends StatelessWidget {
-  const MainApp({super.key});
+/// Run with sync:    flutter run --dart-define-from-file=.env
+/// Run local only:   flutter run
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
 
-  @override
-  Widget build(BuildContext context) {
-    return const MaterialApp(
-      home: Scaffold(body: Center(child: Text('Hello World!'))),
+  if (SupabaseConfig.isConfigured) {
+    // Restores a saved session from disk; works offline.
+    await Supabase.initialize(
+      url: SupabaseConfig.url,
+      publishableKey: SupabaseConfig.anonKey,
+      postgrestOptions: SupabaseConfig.postgrestOptions,
+      authOptions: const FlutterAuthClientOptions(detectSessionInUri: false),
     );
+    try {
+      await BackgroundSync.initialize();
+    } catch (e) {
+      // Background sync is a bonus; the app syncs in the foreground anyway.
+      debugPrint('WorkManager unavailable: $e');
+    }
   }
+
+  runApp(
+    ProviderScope(
+      overrides: [databaseProvider.overrideWithValue(AppDatabase())],
+      child: const OfflineTasksApp(),
+    ),
+  );
 }
