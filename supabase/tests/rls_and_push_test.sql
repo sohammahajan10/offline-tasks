@@ -252,9 +252,20 @@ select tests.ok(
   (select count(*) = 2 from public.tasks),
   'Alice sees only her own two tasks');
 
--- ---------------------------------------------------------------- summary
+-- ---------------------------------------------------------------- schema
 
 reset role;
+
+select tests.ok(
+  exists (
+    select 1 from pg_indexes
+    where schemaname = 'public' and tablename = 'tasks'
+      and indexdef like '%(user_id, server_updated_at)%'
+  ),
+  'tasks has an index on (user_id, server_updated_at) for delta pulls');
+
+-- ---------------------------------------------------------------- summary
+
 select current_setting('tests.passed') as passed,
        current_setting('tests.log') as checks;
 

@@ -93,6 +93,46 @@ class SyncEngine {
 
   Future<void> retryAllFailed() => _resetFailed((q) => const Constant(true));
 
+  /// Syncs everything now: ignores backoff timers and gives failed entries
+  /// one more attempt (their attempt count is kept, so one that keeps
+  /// failing goes straight back to failed). Used before signing out.
+  Future<SyncReport> flush() async {
+    await _running;
+    await (_db.update(
+      _db.syncQueue,
+    )..where((q) => q.status.equals(OpStatus.inFlight).not())).write(
+      const SyncQueueCompanion(
+        status: Value(OpStatus.pending),
+        nextRetryAt: Value(null),
+      ),
+    );
+    return sync();
+  }
+
+  /// Runs [action] while holding the cross-isolate sync lease, so no sync
+  /// (in this isolate or the WorkManager one) touches the database meanwhile.
+  /// Waits up to [wait] for a running sync to finish.
+  Future<T> runExclusive<T>(
+    Future<T> Function() action, {
+    Duration wait = const Duration(seconds: 10),
+  }) async {
+    // Our own run holds the lease under our owner id, so acquiring it would
+    // succeed while it is still running: wait for it first.
+    await _running;
+    final waited = Stopwatch()..start();
+    while (!await _acquireLease()) {
+      if (waited.elapsed > wait) {
+        throw StateError('A sync is still running. Try again in a moment.');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    try {
+      return await action();
+    } finally {
+      await _releaseLease();
+    }
+  }
+
   // --------------------------------------------------------------- run
 
   Future<SyncReport> _sync() async {
