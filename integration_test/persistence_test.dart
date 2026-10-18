@@ -5,9 +5,11 @@
 // use sqlite3_flutter_libs) and that tasks plus their outbox entries are on
 // disk, not just in memory, when the database is reopened.
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:offline_tasks/data/db/database.dart';
@@ -24,9 +26,11 @@ void main() {
 
   tearDownAll(() async {
     final dir = await getApplicationDocumentsDirectory();
-    for (final suffix in ['', '-wal', '-shm']) {
-      final f = File('${dir.path}/$dbName.sqlite$suffix');
-      if (f.existsSync()) f.deleteSync();
+    for (final name in [dbName, '${dbName}_shared']) {
+      for (final suffix in ['', '-wal', '-shm']) {
+        final f = File('${dir.path}/$name.sqlite$suffix');
+        if (f.existsSync()) f.deleteSync();
+      }
     }
   });
 
@@ -83,5 +87,38 @@ void main() {
     expect(ops.firstWhere((o) => o.taskId == gone).opType, OpType.delete);
 
     await second.close();
+  });
+
+  // The WorkManager job writes from another isolate while the app is open.
+  // Its writes must reach the UI's stream queries, or a background pull leaves
+  // the visible list stale until the app restarts.
+  testWidgets('writes from another isolate update open streams', (_) async {
+    final name = '${dbName}_shared';
+    final ui = AppDatabase(AppDatabase.openDefault(name: name));
+    final stream = TaskRepository(ui).watchAll();
+    final emitted = <List<String>>[];
+    final sub = stream.listen((l) => emitted.add([for (final t in l) t.title]));
+    Future<void> until(bool Function() done) => Future.doWhile(() async {
+      if (done()) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      return true;
+    }).timeout(const Duration(seconds: 5));
+
+    await until(() => emitted.isNotEmpty);
+    expect(emitted.last, isEmpty);
+
+    // The WorkManager isolate has platform channels (drift_flutter asks
+    // path_provider for a temp dir); a plain isolate needs the messenger.
+    final token = RootIsolateToken.instance!;
+    await Isolate.run(() async {
+      BackgroundIsolateBinaryMessenger.ensureInitialized(token);
+      final background = AppDatabase(AppDatabase.openDefault(name: name));
+      await TaskRepository(background).create(title: 'Pulled in background');
+      await background.close();
+    });
+
+    await until(() => emitted.last.contains('Pulled in background'));
+    await sub.cancel();
+    await ui.close();
   });
 }

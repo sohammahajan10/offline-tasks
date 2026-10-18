@@ -13,6 +13,11 @@ on two devices while both were offline are merged field by field.
 
 ## For evaluators
 
+**[⬇ Download APK (v1.0.0)](https://github.com/sohammahajan10/offline-tasks/releases/download/v1.0.0/offline-tasks-v1.0.0.apk)**
+· [Release notes](https://github.com/sohammahajan10/offline-tasks/releases/tag/v1.0.0)
+
+Demo video: TODO
+
 ### Demo account
 
 | | |
@@ -20,9 +25,9 @@ on two devices while both were offline are merged field by field.
 | Email | `DEMO_EMAIL` ← *to be filled in* |
 | Password | `DEMO_PASSWORD` ← *to be filled in* |
 
-Install the APK (see [Build](#build)), open **⋮ → Account** and sign in. The
-app also works without an account: tasks stay on the device, and they are
-uploaded the first time you sign in.
+Install the APK (download above, or [build it](#3-build)), open
+**⋮ → Account** and sign in. The app also works without an account: tasks stay
+on the device, and they are uploaded the first time you sign in.
 
 ### Reproduce offline sync (about 2 minutes)
 
@@ -122,6 +127,13 @@ startup.
 
 ## Design
 
+**In short:**
+- **SQLite is the source of truth.** The UI reads only the local database, so it works the same offline.
+- **Transactional outbox:** each change and its sync-queue entry are written in one transaction.
+- **Retries back off:** exponential with jitter, up to 5 attempts, then the change is shown as failed with a Retry button.
+- **Idempotent server function:** an `applied_ops` primary key makes every push apply at most once.
+- **Three-way field merge:** edits to different fields on two devices both survive; same-field conflicts are last-writer-wins.
+
 ```
  UI (Riverpod) ──watches──▶ SQLite (Drift) ◀──writes── TaskRepository
                                │   tasks + sync_queue, one transaction
@@ -129,7 +141,7 @@ startup.
  SyncCoordinator ──when──▶ SyncEngine ──push outbox──▶ apply_task_change() ─┐
  (writes, reconnect,          │    ◀──pull deltas──── tasks (RLS) ◀────────┘
   resume, backoff, timer)     └─ three-way merge on conflict      Supabase
- WorkManager isolate ─────▶ SyncEngine (same DB file, cross-isolate lease)
+ WorkManager isolate ─────▶ SyncEngine (shared DB connection, cross-isolate lease)
 ```
 
 The UI never calls the network. It reads from Drift streams, so every change
@@ -141,8 +153,10 @@ Drift (SQLite, bundled through `package:sqlite3`) is the single source of truth.
 
 - **Tables:** `tasks`, `sync_queue` (the outbox), `sync_log` (history shown in
   the app) and `sync_state` (pull cursor and lease).
-- **Concurrency:** WAL mode lets the app and the WorkManager isolate share the
-  database file.
+- **Concurrency:** the app and the WorkManager isolate share one Drift
+  connection (`shareAcrossIsolates`), so a background pull updates the open
+  list right away. WAL mode covers the case where only the background job is
+  running.
 - **Schema changes:** made with `drift_dev make-migrations`. Snapshots live in
   `drift_schemas/` and every migration step has a data-preservation test.
 - **Deletes:** soft deletes (`is_deleted` tombstones), so a delete made offline
@@ -293,12 +307,12 @@ shows *"N unsynced changes will be lost"*, with **Cancel** as the default.
 | | Recovery | `in_flight` recovery, lost-ack replay, lease for background isolate |
 | **Task management** (20%) | Create / edit / delete / complete | [task_edit_screen.dart](lib/presentation/screens/task_edit_screen.dart), swipe-to-delete with undo |
 | | Priority, deadline, categories, tags | Editor and list chips |
-| | Search and filter | Title/notes/category/tags search; status, priority and category filters; 5 sort orders |
+| | Search and filter | Title/notes/category/tags search; status, priority and category filters; 5 sort orders (smart, manual drag, due date, priority, recently edited) |
 | **UI/UX & state** (15%) | Online/offline indicator | [status_banner.dart](lib/presentation/widgets/status_banner.dart) with a real reachability check |
 | | Pending-sync badge per task | [task_tile.dart](lib/presentation/widgets/task_tile.dart) |
 | | Loading / empty / error states | [task_list_screen.dart](lib/presentation/screens/task_list_screen.dart) |
 | **Code quality** (10%) | Layering | `data/` (db, api, sync, notifications) → `domain/` → `presentation/` |
-| | Tests | 150+ Dart tests, 38 SQL checks, live and on-device tests (below) |
+| | Tests | 152 Dart tests (150 offline + 2 live against Supabase), 2 on-device integration tests, 38 SQL checks (below) |
 
 | Bonus | Status |
 |---|---|
@@ -355,5 +369,8 @@ docs/               demo script, screenshots
 - `applied_ops` grows by one row per push. Pruning rows older than about 30
   days is safe (see [supabase/README.md](supabase/README.md)), but it isn't
   scheduled.
+- Supabase pauses free-tier projects after about 7 days without activity.
+  While paused, the app keeps working offline and shows *server can't be
+  reached*; sync resumes once the project is restored from the dashboard.
 - Android only. The data and sync layers are platform-neutral, but
   notifications and WorkManager are only set up for Android.

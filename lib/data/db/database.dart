@@ -118,7 +118,15 @@ class SyncState extends Table {
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? openDefault());
 
-  static QueryExecutor openDefault() => driftDatabase(name: 'offline_tasks');
+  // The WorkManager job runs in another isolate of the same process while the
+  // app may be open. Drift only tells stream queries about writes made through
+  // the same connection, so without sharing, a background pull never reached
+  // the visible task list. Sharing routes every isolate through one connection.
+  static QueryExecutor openDefault({String name = 'offline_tasks'}) =>
+      driftDatabase(
+        name: name,
+        native: const DriftNativeOptions(shareAcrossIsolates: true),
+      );
 
   // For every schema change: bump this, run `dart run drift_dev make-migrations`,
   // add the `fromNToM` step below and fill in the generated data test in
