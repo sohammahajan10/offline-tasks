@@ -23,7 +23,7 @@ void main() {
 
   Future<List<SyncOp>> queue() => (db.select(
     db.syncQueue,
-  )..orderBy([(q) => OrderingTerm.asc(q.enqueuedAt)])).get();
+  )..orderBy([(q) => OrderingTerm.asc(q.seq)])).get();
 
   Future<TaskRow> row(String id) =>
       (db.select(db.tasks)..where((t) => t.id.equals(id))).getSingle();
@@ -153,6 +153,76 @@ void main() {
       expect(op.lastError, isNull);
     });
 
+    test('a merge keeps the base_version the edits started from', () async {
+      final id = await repo.create(title: 'Synced');
+      await db.delete(db.syncQueue).go();
+      await (db.update(db.tasks)..where((t) => t.id.equals(id))).write(
+        const TasksCompanion(version: Value(3), dirty: Value(false)),
+      );
+
+      await repo.update(id, const TaskPatch(title: 'Edit 1'));
+      final first = (await queue()).single;
+      expect(first.baseVersion, 3);
+
+      // Even if the row's version moves on (the engine does this only together
+      // with the queue entry), a merge must not rewrite base_version.
+      await (db.update(db.tasks)..where((t) => t.id.equals(id))).write(
+        const TasksCompanion(version: Value(9)),
+      );
+      await repo.update(id, const TaskPatch(title: 'Edit 2'));
+      await repo.setCompleted(id, true);
+
+      final merged = (await queue()).single;
+      expect(merged.baseVersion, 3);
+      expect(merged.seq, first.seq);
+      expect(jsonDecode(merged.payloadJson)['title'], 'Edit 2');
+    });
+
+    test('an edit during an in-flight push gets its own entry', () async {
+      final id = await repo.create(title: 'v1');
+      final sending = (await queue()).single;
+      // The sync engine marks the entry while it is being pushed.
+      await (db.update(db.syncQueue)..where((q) => q.seq.equals(sending.seq)))
+          .write(const SyncQueueCompanion(status: Value(OpStatus.inFlight)));
+
+      await repo.update(id, const TaskPatch(title: 'v2'));
+      await repo.setCompleted(id, true); // merges into the new entry
+
+      final ops = await queue();
+      expect(ops, hasLength(2));
+      final [inFlight, waiting] = ops;
+      // The in-flight entry is untouched: same op id, same payload.
+      expect(inFlight.opId, sending.opId);
+      expect(inFlight.status, OpStatus.inFlight);
+      expect(inFlight.payloadJson, sending.payloadJson);
+      // The edits wait behind it, in queue order.
+      expect(waiting.seq, greaterThan(inFlight.seq));
+      expect(waiting.status, OpStatus.pending);
+      final payload = jsonDecode(waiting.payloadJson) as Map;
+      expect(payload['title'], 'v2');
+      expect(payload['completed'], isTrue);
+
+      // When the push is acked, deleting the in-flight entry keeps the edits.
+      await (db.delete(
+        db.syncQueue,
+      )..where((q) => q.seq.equals(inFlight.seq))).go();
+      expect((await queue()).single.opId, waiting.opId);
+      expect(await repo.watchPendingCount().first, 1);
+    });
+
+    test('create then delete before any sync still sends a delete', () async {
+      // Dropping the entry would be unsafe: an earlier send of the create may
+      // have reached the server with only the ack lost. The server accepts a
+      // delete for an unknown id by storing a tombstone (phase 2 tests this).
+      final id = await repo.create(title: 'Oops');
+      await repo.delete(id);
+
+      final op = (await queue()).single;
+      expect(op.opType, OpType.delete);
+      expect(op.baseVersion, 0);
+      expect(jsonDecode(op.payloadJson)['is_deleted'], isTrue);
+    });
+
     test('the queue keeps FIFO order across coalesced edits', () async {
       final a = await repo.create(title: 'A');
       final b = await repo.create(title: 'B');
@@ -188,8 +258,12 @@ void main() {
       expect(await repo.watchPendingCount().first, 0);
       await repo.create(title: 'One');
       final two = await repo.create(title: 'Two');
+      await db
+          .update(db.syncQueue)
+          .write(const SyncQueueCompanion(status: Value(OpStatus.inFlight)));
       await repo.update(two, const TaskPatch(title: 'Two!'));
-      expect(await repo.watchPendingCount().first, 2);
+      expect(await queue(), hasLength(3));
+      expect(await repo.watchPendingCount().first, 2, reason: 'counts tasks');
     });
 
     test('rejects an empty title without writing anything', () async {

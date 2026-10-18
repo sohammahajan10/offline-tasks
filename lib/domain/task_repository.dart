@@ -49,7 +49,8 @@ class TaskRepository {
 
   /// Number of tasks with changes not yet acknowledged by the server.
   Stream<int> watchPendingCount() {
-    final count = _db.syncQueue.opId.count();
+    // Distinct tasks: one task can have an in-flight entry and a waiting one.
+    final count = _db.syncQueue.taskId.count(distinct: true);
     return (_db.selectOnly(
       _db.syncQueue,
     )..addColumns([count])).map((r) => r.read(count)!).watchSingle();
@@ -140,24 +141,38 @@ class TaskRepository {
 
   /// Adds or refreshes the task's outbox entry. Must run inside a transaction.
   ///
-  /// A task has at most one queued op: further offline edits are coalesced
-  /// into it, so ten edits cost one request. The payload is always the full
-  /// current row, so whatever op is sent carries the latest state.
+  /// Offline edits are merged into the task's waiting entry, so ten edits cost
+  /// one request. The payload is always the full current row, so whichever
+  /// entry is sent carries the latest state.
   ///
-  /// Coalescing assigns a fresh op id. If the old op was already sent and the
-  /// server applied it but the ack was lost, reusing its id would make the
-  /// server treat the new payload as a duplicate and drop it.
+  /// * Only `pending` and `failed` entries are merged into. An `in_flight`
+  ///   entry is being pushed: merging would lose this edit when its ack
+  ///   deletes the entry, so the edit gets a new entry behind it instead.
+  ///   (`failed` entries are merged too: the newer entry carries the full
+  ///   state, so a separate stale failed entry could later be retried and
+  ///   overwrite it.)
+  /// * A merge keeps `base_version`: the server version the user's edits
+  ///   started from. Only the sync engine moves it, when the server version
+  ///   advances (our own ack, or a pull that was merged in).
+  /// * A merge assigns a fresh op id. If the old op was sent and the server
+  ///   applied it but the ack was lost, reusing its id would make the server
+  ///   treat the new payload as a duplicate and drop it.
+  /// * A merge keeps `seq`, so the task keeps its place in the queue.
   Future<void> _enqueue(String taskId) async {
     final row = await (_db.select(
       _db.tasks,
     )..where((t) => t.id.equals(taskId))).getSingle();
     final opType = opTypeFor(row);
     final payload = jsonEncode(rowToWire(row));
-    final existing = await (_db.select(
-      _db.syncQueue,
-    )..where((q) => q.taskId.equals(taskId))).getSingleOrNull();
+    final waiting =
+        await (_db.select(_db.syncQueue)..where(
+              (q) =>
+                  q.taskId.equals(taskId) &
+                  q.status.isIn([OpStatus.pending, OpStatus.failed]),
+            ))
+            .getSingleOrNull();
 
-    if (existing == null) {
+    if (waiting == null) {
       await _db
           .into(_db.syncQueue)
           .insert(
@@ -167,7 +182,6 @@ class TaskRepository {
               opType: opType,
               payloadJson: payload,
               baseVersion: row.version,
-              enqueuedAt: _clock(),
             ),
           );
       return;
@@ -175,18 +189,16 @@ class TaskRepository {
 
     await (_db.update(
       _db.syncQueue,
-    )..where((q) => q.opId.equals(existing.opId))).write(
+    )..where((q) => q.seq.equals(waiting.seq))).write(
       SyncQueueCompanion(
         opId: Value(_newId()),
         opType: Value(opType),
         payloadJson: Value(payload),
-        baseVersion: Value(row.version),
         // A new edit gets a fresh set of attempts, even if the op had failed.
         status: const Value(OpStatus.pending),
         attempts: const Value(0),
         nextRetryAt: const Value(null),
         lastError: const Value(null),
-        // enqueuedAt is kept, so the task keeps its place in the queue.
       ),
     );
   }

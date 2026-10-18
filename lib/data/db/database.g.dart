@@ -703,6 +703,19 @@ class $SyncQueueTable extends SyncQueue
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
   $SyncQueueTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _seqMeta = const VerificationMeta('seq');
+  @override
+  late final GeneratedColumn<int> seq = GeneratedColumn<int>(
+    'seq',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
   static const VerificationMeta _opIdMeta = const VerificationMeta('opId');
   @override
   late final GeneratedColumn<String> opId = GeneratedColumn<String>(
@@ -711,6 +724,7 @@ class $SyncQueueTable extends SyncQueue
     false,
     type: DriftSqlType.string,
     requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways('UNIQUE'),
   );
   static const VerificationMeta _taskIdMeta = const VerificationMeta('taskId');
   @override
@@ -799,19 +813,9 @@ class $SyncQueueTable extends SyncQueue
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
-  static const VerificationMeta _enqueuedAtMeta = const VerificationMeta(
-    'enqueuedAt',
-  );
-  @override
-  late final GeneratedColumn<DateTime> enqueuedAt = GeneratedColumn<DateTime>(
-    'enqueued_at',
-    aliasedName,
-    false,
-    type: DriftSqlType.dateTime,
-    requiredDuringInsert: true,
-  );
   @override
   List<GeneratedColumn> get $columns => [
+    seq,
     opId,
     taskId,
     opType,
@@ -821,7 +825,6 @@ class $SyncQueueTable extends SyncQueue
     nextRetryAt,
     status,
     lastError,
-    enqueuedAt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -835,6 +838,12 @@ class $SyncQueueTable extends SyncQueue
   }) {
     final context = VerificationContext();
     final data = instance.toColumns(true);
+    if (data.containsKey('seq')) {
+      context.handle(
+        _seqMeta,
+        seq.isAcceptableOrUnknown(data['seq']!, _seqMeta),
+      );
+    }
     if (data.containsKey('op_id')) {
       context.handle(
         _opIdMeta,
@@ -908,23 +917,19 @@ class $SyncQueueTable extends SyncQueue
         lastError.isAcceptableOrUnknown(data['last_error']!, _lastErrorMeta),
       );
     }
-    if (data.containsKey('enqueued_at')) {
-      context.handle(
-        _enqueuedAtMeta,
-        enqueuedAt.isAcceptableOrUnknown(data['enqueued_at']!, _enqueuedAtMeta),
-      );
-    } else if (isInserting) {
-      context.missing(_enqueuedAtMeta);
-    }
     return context;
   }
 
   @override
-  Set<GeneratedColumn> get $primaryKey => {opId};
+  Set<GeneratedColumn> get $primaryKey => {seq};
   @override
   SyncOp map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return SyncOp(
+      seq: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}seq'],
+      )!,
       opId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}op_id'],
@@ -961,10 +966,6 @@ class $SyncQueueTable extends SyncQueue
         DriftSqlType.string,
         data['${effectivePrefix}last_error'],
       ),
-      enqueuedAt: attachedDatabase.typeMapping.read(
-        DriftSqlType.dateTime,
-        data['${effectivePrefix}enqueued_at'],
-      )!,
     );
   }
 
@@ -975,6 +976,11 @@ class $SyncQueueTable extends SyncQueue
 }
 
 class SyncOp extends DataClass implements Insertable<SyncOp> {
+  /// Drain order. AUTOINCREMENT never reuses a value, and unlike a wall-clock
+  /// timestamp it cannot tie or go backwards when the phone's clock changes.
+  final int seq;
+
+  /// Idempotency key sent to the server.
   final String opId;
   final String taskId;
   final String opType;
@@ -984,11 +990,8 @@ class SyncOp extends DataClass implements Insertable<SyncOp> {
   final DateTime? nextRetryAt;
   final String status;
   final String? lastError;
-
-  /// Not in the original plan: gives the queue a stable FIFO order, since
-  /// [opId] is a random UUID.
-  final DateTime enqueuedAt;
   const SyncOp({
+    required this.seq,
     required this.opId,
     required this.taskId,
     required this.opType,
@@ -998,11 +1001,11 @@ class SyncOp extends DataClass implements Insertable<SyncOp> {
     this.nextRetryAt,
     required this.status,
     this.lastError,
-    required this.enqueuedAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    map['seq'] = Variable<int>(seq);
     map['op_id'] = Variable<String>(opId);
     map['task_id'] = Variable<String>(taskId);
     map['op_type'] = Variable<String>(opType);
@@ -1016,12 +1019,12 @@ class SyncOp extends DataClass implements Insertable<SyncOp> {
     if (!nullToAbsent || lastError != null) {
       map['last_error'] = Variable<String>(lastError);
     }
-    map['enqueued_at'] = Variable<DateTime>(enqueuedAt);
     return map;
   }
 
   SyncQueueCompanion toCompanion(bool nullToAbsent) {
     return SyncQueueCompanion(
+      seq: Value(seq),
       opId: Value(opId),
       taskId: Value(taskId),
       opType: Value(opType),
@@ -1035,7 +1038,6 @@ class SyncOp extends DataClass implements Insertable<SyncOp> {
       lastError: lastError == null && nullToAbsent
           ? const Value.absent()
           : Value(lastError),
-      enqueuedAt: Value(enqueuedAt),
     );
   }
 
@@ -1045,6 +1047,7 @@ class SyncOp extends DataClass implements Insertable<SyncOp> {
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return SyncOp(
+      seq: serializer.fromJson<int>(json['seq']),
       opId: serializer.fromJson<String>(json['opId']),
       taskId: serializer.fromJson<String>(json['taskId']),
       opType: serializer.fromJson<String>(json['opType']),
@@ -1054,13 +1057,13 @@ class SyncOp extends DataClass implements Insertable<SyncOp> {
       nextRetryAt: serializer.fromJson<DateTime?>(json['nextRetryAt']),
       status: serializer.fromJson<String>(json['status']),
       lastError: serializer.fromJson<String?>(json['lastError']),
-      enqueuedAt: serializer.fromJson<DateTime>(json['enqueuedAt']),
     );
   }
   @override
   Map<String, dynamic> toJson({ValueSerializer? serializer}) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
+      'seq': serializer.toJson<int>(seq),
       'opId': serializer.toJson<String>(opId),
       'taskId': serializer.toJson<String>(taskId),
       'opType': serializer.toJson<String>(opType),
@@ -1070,11 +1073,11 @@ class SyncOp extends DataClass implements Insertable<SyncOp> {
       'nextRetryAt': serializer.toJson<DateTime?>(nextRetryAt),
       'status': serializer.toJson<String>(status),
       'lastError': serializer.toJson<String?>(lastError),
-      'enqueuedAt': serializer.toJson<DateTime>(enqueuedAt),
     };
   }
 
   SyncOp copyWith({
+    int? seq,
     String? opId,
     String? taskId,
     String? opType,
@@ -1084,8 +1087,8 @@ class SyncOp extends DataClass implements Insertable<SyncOp> {
     Value<DateTime?> nextRetryAt = const Value.absent(),
     String? status,
     Value<String?> lastError = const Value.absent(),
-    DateTime? enqueuedAt,
   }) => SyncOp(
+    seq: seq ?? this.seq,
     opId: opId ?? this.opId,
     taskId: taskId ?? this.taskId,
     opType: opType ?? this.opType,
@@ -1095,10 +1098,10 @@ class SyncOp extends DataClass implements Insertable<SyncOp> {
     nextRetryAt: nextRetryAt.present ? nextRetryAt.value : this.nextRetryAt,
     status: status ?? this.status,
     lastError: lastError.present ? lastError.value : this.lastError,
-    enqueuedAt: enqueuedAt ?? this.enqueuedAt,
   );
   SyncOp copyWithCompanion(SyncQueueCompanion data) {
     return SyncOp(
+      seq: data.seq.present ? data.seq.value : this.seq,
       opId: data.opId.present ? data.opId.value : this.opId,
       taskId: data.taskId.present ? data.taskId.value : this.taskId,
       opType: data.opType.present ? data.opType.value : this.opType,
@@ -1114,15 +1117,13 @@ class SyncOp extends DataClass implements Insertable<SyncOp> {
           : this.nextRetryAt,
       status: data.status.present ? data.status.value : this.status,
       lastError: data.lastError.present ? data.lastError.value : this.lastError,
-      enqueuedAt: data.enqueuedAt.present
-          ? data.enqueuedAt.value
-          : this.enqueuedAt,
     );
   }
 
   @override
   String toString() {
     return (StringBuffer('SyncOp(')
+          ..write('seq: $seq, ')
           ..write('opId: $opId, ')
           ..write('taskId: $taskId, ')
           ..write('opType: $opType, ')
@@ -1131,14 +1132,14 @@ class SyncOp extends DataClass implements Insertable<SyncOp> {
           ..write('attempts: $attempts, ')
           ..write('nextRetryAt: $nextRetryAt, ')
           ..write('status: $status, ')
-          ..write('lastError: $lastError, ')
-          ..write('enqueuedAt: $enqueuedAt')
+          ..write('lastError: $lastError')
           ..write(')'))
         .toString();
   }
 
   @override
   int get hashCode => Object.hash(
+    seq,
     opId,
     taskId,
     opType,
@@ -1148,12 +1149,12 @@ class SyncOp extends DataClass implements Insertable<SyncOp> {
     nextRetryAt,
     status,
     lastError,
-    enqueuedAt,
   );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is SyncOp &&
+          other.seq == this.seq &&
           other.opId == this.opId &&
           other.taskId == this.taskId &&
           other.opType == this.opType &&
@@ -1162,11 +1163,11 @@ class SyncOp extends DataClass implements Insertable<SyncOp> {
           other.attempts == this.attempts &&
           other.nextRetryAt == this.nextRetryAt &&
           other.status == this.status &&
-          other.lastError == this.lastError &&
-          other.enqueuedAt == this.enqueuedAt);
+          other.lastError == this.lastError);
 }
 
 class SyncQueueCompanion extends UpdateCompanion<SyncOp> {
+  final Value<int> seq;
   final Value<String> opId;
   final Value<String> taskId;
   final Value<String> opType;
@@ -1176,9 +1177,8 @@ class SyncQueueCompanion extends UpdateCompanion<SyncOp> {
   final Value<DateTime?> nextRetryAt;
   final Value<String> status;
   final Value<String?> lastError;
-  final Value<DateTime> enqueuedAt;
-  final Value<int> rowid;
   const SyncQueueCompanion({
+    this.seq = const Value.absent(),
     this.opId = const Value.absent(),
     this.taskId = const Value.absent(),
     this.opType = const Value.absent(),
@@ -1188,10 +1188,9 @@ class SyncQueueCompanion extends UpdateCompanion<SyncOp> {
     this.nextRetryAt = const Value.absent(),
     this.status = const Value.absent(),
     this.lastError = const Value.absent(),
-    this.enqueuedAt = const Value.absent(),
-    this.rowid = const Value.absent(),
   });
   SyncQueueCompanion.insert({
+    this.seq = const Value.absent(),
     required String opId,
     required String taskId,
     required String opType,
@@ -1201,15 +1200,13 @@ class SyncQueueCompanion extends UpdateCompanion<SyncOp> {
     this.nextRetryAt = const Value.absent(),
     this.status = const Value.absent(),
     this.lastError = const Value.absent(),
-    required DateTime enqueuedAt,
-    this.rowid = const Value.absent(),
   }) : opId = Value(opId),
        taskId = Value(taskId),
        opType = Value(opType),
        payloadJson = Value(payloadJson),
-       baseVersion = Value(baseVersion),
-       enqueuedAt = Value(enqueuedAt);
+       baseVersion = Value(baseVersion);
   static Insertable<SyncOp> custom({
+    Expression<int>? seq,
     Expression<String>? opId,
     Expression<String>? taskId,
     Expression<String>? opType,
@@ -1219,10 +1216,9 @@ class SyncQueueCompanion extends UpdateCompanion<SyncOp> {
     Expression<DateTime>? nextRetryAt,
     Expression<String>? status,
     Expression<String>? lastError,
-    Expression<DateTime>? enqueuedAt,
-    Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
+      if (seq != null) 'seq': seq,
       if (opId != null) 'op_id': opId,
       if (taskId != null) 'task_id': taskId,
       if (opType != null) 'op_type': opType,
@@ -1232,12 +1228,11 @@ class SyncQueueCompanion extends UpdateCompanion<SyncOp> {
       if (nextRetryAt != null) 'next_retry_at': nextRetryAt,
       if (status != null) 'status': status,
       if (lastError != null) 'last_error': lastError,
-      if (enqueuedAt != null) 'enqueued_at': enqueuedAt,
-      if (rowid != null) 'rowid': rowid,
     });
   }
 
   SyncQueueCompanion copyWith({
+    Value<int>? seq,
     Value<String>? opId,
     Value<String>? taskId,
     Value<String>? opType,
@@ -1247,10 +1242,9 @@ class SyncQueueCompanion extends UpdateCompanion<SyncOp> {
     Value<DateTime?>? nextRetryAt,
     Value<String>? status,
     Value<String?>? lastError,
-    Value<DateTime>? enqueuedAt,
-    Value<int>? rowid,
   }) {
     return SyncQueueCompanion(
+      seq: seq ?? this.seq,
       opId: opId ?? this.opId,
       taskId: taskId ?? this.taskId,
       opType: opType ?? this.opType,
@@ -1260,14 +1254,15 @@ class SyncQueueCompanion extends UpdateCompanion<SyncOp> {
       nextRetryAt: nextRetryAt ?? this.nextRetryAt,
       status: status ?? this.status,
       lastError: lastError ?? this.lastError,
-      enqueuedAt: enqueuedAt ?? this.enqueuedAt,
-      rowid: rowid ?? this.rowid,
     );
   }
 
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    if (seq.present) {
+      map['seq'] = Variable<int>(seq.value);
+    }
     if (opId.present) {
       map['op_id'] = Variable<String>(opId.value);
     }
@@ -1295,18 +1290,13 @@ class SyncQueueCompanion extends UpdateCompanion<SyncOp> {
     if (lastError.present) {
       map['last_error'] = Variable<String>(lastError.value);
     }
-    if (enqueuedAt.present) {
-      map['enqueued_at'] = Variable<DateTime>(enqueuedAt.value);
-    }
-    if (rowid.present) {
-      map['rowid'] = Variable<int>(rowid.value);
-    }
     return map;
   }
 
   @override
   String toString() {
     return (StringBuffer('SyncQueueCompanion(')
+          ..write('seq: $seq, ')
           ..write('opId: $opId, ')
           ..write('taskId: $taskId, ')
           ..write('opType: $opType, ')
@@ -1315,9 +1305,7 @@ class SyncQueueCompanion extends UpdateCompanion<SyncOp> {
           ..write('attempts: $attempts, ')
           ..write('nextRetryAt: $nextRetryAt, ')
           ..write('status: $status, ')
-          ..write('lastError: $lastError, ')
-          ..write('enqueuedAt: $enqueuedAt, ')
-          ..write('rowid: $rowid')
+          ..write('lastError: $lastError')
           ..write(')'))
         .toString();
   }
@@ -1332,9 +1320,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     'idx_queue_task',
     'CREATE INDEX idx_queue_task ON sync_queue (task_id)',
   );
-  late final Index idxQueueOrder = Index(
-    'idx_queue_order',
-    'CREATE INDEX idx_queue_order ON sync_queue (status, enqueued_at)',
+  late final Index idxQueueStatus = Index(
+    'idx_queue_status',
+    'CREATE INDEX idx_queue_status ON sync_queue (status)',
   );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
@@ -1344,7 +1332,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     tasks,
     syncQueue,
     idxQueueTask,
-    idxQueueOrder,
+    idxQueueStatus,
   ];
   @override
   DriftDatabaseOptions get options =>
@@ -1776,6 +1764,7 @@ typedef $$TasksTableProcessedTableManager =
       PrefetchHooks Function({bool syncQueueRefs})
     >;
 typedef $$SyncQueueTableCreateCompanionBuilder = SyncQueueCompanion Function({
+  Value<int> seq,
   required String opId,
   required String taskId,
   required String opType,
@@ -1785,10 +1774,9 @@ typedef $$SyncQueueTableCreateCompanionBuilder = SyncQueueCompanion Function({
   Value<DateTime?> nextRetryAt,
   Value<String> status,
   Value<String?> lastError,
-  required DateTime enqueuedAt,
-  Value<int> rowid,
 });
 typedef $$SyncQueueTableUpdateCompanionBuilder = SyncQueueCompanion Function({
+  Value<int> seq,
   Value<String> opId,
   Value<String> taskId,
   Value<String> opType,
@@ -1798,8 +1786,6 @@ typedef $$SyncQueueTableUpdateCompanionBuilder = SyncQueueCompanion Function({
   Value<DateTime?> nextRetryAt,
   Value<String> status,
   Value<String?> lastError,
-  Value<DateTime> enqueuedAt,
-  Value<int> rowid,
 });
 
 final class $$SyncQueueTableReferences
@@ -1833,6 +1819,11 @@ class $$SyncQueueTableFilterComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnFilters<int> get seq => $composableBuilder(
+    column: $table.seq,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get opId => $composableBuilder(
     column: $table.opId,
     builder: (column) => ColumnFilters(column),
@@ -1873,11 +1864,6 @@ class $$SyncQueueTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<DateTime> get enqueuedAt => $composableBuilder(
-    column: $table.enqueuedAt,
-    builder: (column) => ColumnFilters(column),
-  );
-
   $$TasksTableFilterComposer get taskId {
     final $$TasksTableFilterComposer composer = $composerBuilder(
       composer: this,
@@ -1911,6 +1897,11 @@ class $$SyncQueueTableOrderingComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnOrderings<int> get seq => $composableBuilder(
+    column: $table.seq,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get opId => $composableBuilder(
     column: $table.opId,
     builder: (column) => ColumnOrderings(column),
@@ -1951,11 +1942,6 @@ class $$SyncQueueTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<DateTime> get enqueuedAt => $composableBuilder(
-    column: $table.enqueuedAt,
-    builder: (column) => ColumnOrderings(column),
-  );
-
   $$TasksTableOrderingComposer get taskId {
     final $$TasksTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -1989,6 +1975,9 @@ class $$SyncQueueTableAnnotationComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  GeneratedColumn<int> get seq =>
+      $composableBuilder(column: $table.seq, builder: (column) => column);
+
   GeneratedColumn<String> get opId =>
       $composableBuilder(column: $table.opId, builder: (column) => column);
 
@@ -2018,11 +2007,6 @@ class $$SyncQueueTableAnnotationComposer
 
   GeneratedColumn<String> get lastError =>
       $composableBuilder(column: $table.lastError, builder: (column) => column);
-
-  GeneratedColumn<DateTime> get enqueuedAt => $composableBuilder(
-    column: $table.enqueuedAt,
-    builder: (column) => column,
-  );
 
   $$TasksTableAnnotationComposer get taskId {
     final $$TasksTableAnnotationComposer composer = $composerBuilder(
@@ -2076,6 +2060,7 @@ class $$SyncQueueTableTableManager
               $$SyncQueueTableAnnotationComposer($db: db, $table: table),
           updateCompanionCallback:
               ({
+                Value<int> seq = const Value.absent(),
                 Value<String> opId = const Value.absent(),
                 Value<String> taskId = const Value.absent(),
                 Value<String> opType = const Value.absent(),
@@ -2085,9 +2070,8 @@ class $$SyncQueueTableTableManager
                 Value<DateTime?> nextRetryAt = const Value.absent(),
                 Value<String> status = const Value.absent(),
                 Value<String?> lastError = const Value.absent(),
-                Value<DateTime> enqueuedAt = const Value.absent(),
-                Value<int> rowid = const Value.absent(),
               }) => SyncQueueCompanion(
+                seq: seq,
                 opId: opId,
                 taskId: taskId,
                 opType: opType,
@@ -2097,11 +2081,10 @@ class $$SyncQueueTableTableManager
                 nextRetryAt: nextRetryAt,
                 status: status,
                 lastError: lastError,
-                enqueuedAt: enqueuedAt,
-                rowid: rowid,
               ),
           createCompanionCallback:
               ({
+                Value<int> seq = const Value.absent(),
                 required String opId,
                 required String taskId,
                 required String opType,
@@ -2111,9 +2094,8 @@ class $$SyncQueueTableTableManager
                 Value<DateTime?> nextRetryAt = const Value.absent(),
                 Value<String> status = const Value.absent(),
                 Value<String?> lastError = const Value.absent(),
-                required DateTime enqueuedAt,
-                Value<int> rowid = const Value.absent(),
               }) => SyncQueueCompanion.insert(
+                seq: seq,
                 opId: opId,
                 taskId: taskId,
                 opType: opType,
@@ -2123,8 +2105,6 @@ class $$SyncQueueTableTableManager
                 nextRetryAt: nextRetryAt,
                 status: status,
                 lastError: lastError,
-                enqueuedAt: enqueuedAt,
-                rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
               .map(

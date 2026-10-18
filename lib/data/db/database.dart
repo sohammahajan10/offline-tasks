@@ -1,6 +1,8 @@
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 
+import 'database.steps.dart';
+
 part 'database.g.dart';
 
 /// Local copy of every task — the single source of truth for the UI.
@@ -33,9 +35,14 @@ class Tasks extends Table {
 /// Transactional outbox, written in the same transaction as the task change.
 @DataClassName('SyncOp')
 @TableIndex(name: 'idx_queue_task', columns: {#taskId})
-@TableIndex(name: 'idx_queue_order', columns: {#status, #enqueuedAt})
+@TableIndex(name: 'idx_queue_status', columns: {#status})
 class SyncQueue extends Table {
-  TextColumn get opId => text()(); // idempotency key sent to the server
+  /// Drain order. AUTOINCREMENT never reuses a value, and unlike a wall-clock
+  /// timestamp it cannot tie or go backwards when the phone's clock changes.
+  IntColumn get seq => integer().autoIncrement()();
+
+  /// Idempotency key sent to the server.
+  TextColumn get opId => text().unique()();
   TextColumn get taskId => text().references(Tasks, #id)();
   TextColumn get opType => text()(); // see OpType
   TextColumn get payloadJson => text()();
@@ -45,13 +52,6 @@ class SyncQueue extends Table {
   TextColumn get status =>
       text().withDefault(const Constant('pending'))(); // see OpStatus
   TextColumn get lastError => text().nullable()();
-
-  /// Not in the original plan: gives the queue a stable FIFO order, since
-  /// [opId] is a random UUID.
-  DateTimeColumn get enqueuedAt => dateTime()();
-
-  @override
-  Set<Column> get primaryKey => {opId};
 }
 
 abstract final class OpType {
@@ -62,6 +62,12 @@ abstract final class OpType {
 
 abstract final class OpStatus {
   static const pending = 'pending';
+
+  /// Being pushed right now. Never merged into: an edit that arrives
+  /// meanwhile gets its own entry, or it would be lost when this one is acked.
+  static const inFlight = 'in_flight';
+
+  /// Gave up after [Backoff.maxAttempts]; retried manually from the UI.
   static const failed = 'failed';
 }
 
@@ -71,20 +77,36 @@ class AppDatabase extends _$AppDatabase {
 
   static QueryExecutor openDefault() => driftDatabase(name: 'offline_tasks');
 
-  // Bump this and run `dart run drift_dev make-migrations` for every schema
-  // change, then add the step to [migration]. Never edit an old step.
+  // For every schema change: bump this, run `dart run drift_dev make-migrations`,
+  // add the `fromNToM` step below and fill in the generated data test in
+  // test/drift/. Never edit an old step: devices may already have run it.
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) => m.createAll(),
-    onUpgrade: (m, from, to) async {
-      // Step-by-step upgrades are added here from schema version 2 on,
-      // generated via `make-migrations` (database.steps.dart). Existing
-      // rows are kept: no step may drop and recreate a table with data.
-      throw StateError('No migration path from schema $from to $to');
-    },
+    onUpgrade: stepByStep(
+      // v2: the queue is drained by an AUTOINCREMENT `seq` instead of the
+      // wall-clock `enqueued_at`. AUTOINCREMENT must be the INTEGER PRIMARY
+      // KEY, so the table is rebuilt; existing entries keep their insertion
+      // order through their rowid. `op_id` becomes a UNIQUE column.
+      from1To2: (m, schema) async {
+        // alterTable re-creates the old indexes, and this one names the
+        // dropped column.
+        await customStatement('DROP INDEX IF EXISTS idx_queue_order');
+        await m.alterTable(
+          TableMigration(
+            schema.syncQueue,
+            columnTransformer: {
+              schema.syncQueue.seq: const CustomExpression<int>('rowid'),
+            },
+            newColumns: [schema.syncQueue.seq],
+          ),
+        );
+        await m.create(schema.idxQueueStatus);
+      },
+    ),
     beforeOpen: (details) async {
       // The foreground app and the WorkManager isolate can open the same file.
       await customStatement('PRAGMA journal_mode = WAL');
