@@ -1,0 +1,13 @@
+targets:
+  $default:
+    builders:
+      drift_dev:
+        options:
+          # ISO-8601 text keeps millisecond precision, which last-writer-wins needs.
+          store_date_time_values_as_text: true
+          # `dart run drift_dev make-migrations` snapshots each schema version
+          # into drift_schemas/ and generates step-by-step migrations + tests.
+          databases:
+            app_database: lib/data/db/database.dart
+          schema_dir: drift_schemas/
+          test_dir: test/drift/

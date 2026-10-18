@@ -52,3 +52,6 @@ app.*.map.json
 
 # Phase 1-2 working drafts (delete after Phase 2)
 /drafts/
+
+# Gradle output from the Android project dir
+/android/build/
