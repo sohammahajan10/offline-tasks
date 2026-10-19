@@ -3,6 +3,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/intl.dart';
 import 'package:offline_tasks/data/db/database.dart';
 import 'package:offline_tasks/data/sync/connectivity_monitor.dart';
 import 'package:offline_tasks/data/sync/sync_engine.dart';
@@ -12,6 +13,7 @@ import 'package:offline_tasks/domain/task_query.dart';
 import 'package:offline_tasks/domain/task_repository.dart';
 import 'package:offline_tasks/presentation/providers.dart';
 import 'package:offline_tasks/presentation/screens/account_screen.dart';
+import 'package:offline_tasks/presentation/screens/task_edit_screen.dart';
 import 'package:offline_tasks/presentation/screens/task_list_screen.dart';
 
 import '../support/fake_remote_api.dart';
@@ -236,6 +238,24 @@ void main() {
         for (final t in await db.select(db.tasks).get()) t.id: t.sortKey,
       };
       expect(keys[a]!.compareTo(keys[c]!), greaterThan(0));
+      await done(tester);
+    });
+  });
+
+  group('editor', () {
+    // Pulled rows come back from the server in UTC. The editor showed (and
+    // the pickers started from) the UTC wall time. Only fails on a machine
+    // whose time zone isn't UTC, like the emulator in IST it was found on.
+    testWidgets('shows a pulled UTC deadline in local time', (tester) async {
+      final due = DateTime.utc(2026, 10, 24, 3, 30);
+      final id = await repo.create(title: 'Water the plants', dueAt: due);
+      await pump(tester, home: TaskEditScreen(taskId: id));
+
+      final format = DateFormat('EEE d MMM y, HH:mm');
+      expect(find.text(format.format(due.toLocal())), findsOneWidget);
+      if (due.toLocal().timeZoneOffset != Duration.zero) {
+        expect(find.text(format.format(due)), findsNothing);
+      }
       await done(tester);
     });
   });

@@ -62,7 +62,8 @@ class _TaskEditScreenState extends ConsumerState<TaskEditScreen> {
         _notes.text = task.notes;
         _category.text = task.category ?? '';
         _priority = task.priority;
-        _dueAt = task.dueAt;
+        // Pulled rows carry UTC times; edit and show them in local time.
+        _dueAt = task.dueAt?.toLocal();
         _tags = [...task.tags];
         _completed = task.completed;
         _recurrence = task.recurrence;
