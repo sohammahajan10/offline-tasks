@@ -22,8 +22,8 @@ Demo video: TODO
 
 | | |
 |---|---|
-| Email | `DEMO_EMAIL` ← *to be filled in* |
-| Password | `DEMO_PASSWORD` ← *to be filled in* |
+| Email | `demo@offline-tasks.test` |
+| Password | `qwerty` |
 
 Install the APK (download above, or [build it](#3-build)), open
 **⋮ → Account** and sign in. The app also works without an account: tasks stay
