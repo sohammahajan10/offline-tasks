@@ -327,7 +327,7 @@ shows *"N unsynced changes will be lost"*, with **Cancel** as the default.
 | | Pending-sync badge per task | [task_tile.dart](lib/presentation/widgets/task_tile.dart) |
 | | Loading / empty / error states | [task_list_screen.dart](lib/presentation/screens/task_list_screen.dart) |
 | **Code quality** (10%) | Layering | `data/` (db, api, sync, notifications) → `domain/` → `presentation/` |
-| | Tests | 162 Dart tests (160 offline + 2 live against Supabase), 2 on-device integration tests, 38 SQL checks (below) |
+| | Tests | 167 Dart tests (165 offline + 2 live against Supabase), 2 on-device integration tests, 38 SQL checks (below) |
 
 | Bonus | Status |
 |---|---|
@@ -387,5 +387,9 @@ docs/               demo script, screenshots
 - Supabase pauses free-tier projects after about 7 days without activity.
   While paused, the app keeps working offline and shows *server can't be
   reached*; sync resumes once the project is restored from the dashboard.
+- One open occurrence per repeating series is enforced on each device, not on
+  the server. If one device unticks an old occurrence while another completes
+  the next one, both offline, two open occurrences can appear after sync.
+  This is rare; deleting one of them fixes it.
 - Android only. The data and sync layers are platform-neutral, but
   notifications and WorkManager are only set up for Android.
