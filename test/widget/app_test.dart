@@ -67,6 +67,19 @@ void main() {
     await db.close();
   }
 
+  /// A weekly series ticked twice: A and B done, C open. Returns A's id.
+  Future<String> seriesWithTwoDone() async {
+    final a = await repo.create(
+      title: 'Water plants',
+      dueAt: DateTime.now().add(const Duration(days: 1)),
+      recurrence: Recurrence.weekly,
+    );
+    await repo.setCompleted(a, true);
+    final b = (await db.select(db.tasks).get()).singleWhere((t) => t.id != a);
+    await repo.setCompleted(b.id, true);
+    return a;
+  }
+
   group('task list', () {
     testWidgets('empty state, and no sync UI in a local-only build', (
       tester,
@@ -211,6 +224,31 @@ void main() {
       },
     );
 
+    testWidgets('unticking an old repeat is refused and stays ticked', (
+      tester,
+    ) async {
+      final a = await seriesWithTwoDone();
+      await pump(tester);
+      final box = find.descendant(
+        of: find.byKey(Key('task-$a')),
+        matching: find.byType(Checkbox),
+      );
+      expect(tester.widget<Checkbox>(box).value, isTrue);
+
+      await tester.tap(box);
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'This repeat is already past. Reopen the latest one instead.',
+        ),
+        findsOneWidget,
+      );
+      expect(tester.widget<Checkbox>(box).value, isTrue);
+      final open = (await db.select(db.tasks).get()).where((t) => !t.completed);
+      expect(open, hasLength(1));
+      await done(tester);
+    });
+
     testWidgets('manual order: drag a task by its handle', (tester) async {
       final c = await repo.create(title: 'C task');
       await repo.create(title: 'B task');
@@ -251,6 +289,32 @@ void main() {
   });
 
   group('editor', () {
+    testWidgets('unticking Done on an old repeat is refused', (tester) async {
+      final a = await seriesWithTwoDone();
+      await pump(tester, home: TaskEditScreen(taskId: a));
+      final doneSwitch = find.byType(SwitchListTile);
+      await tester.scrollUntilVisible(
+        doneSwitch,
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(doneSwitch);
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('save-task')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text(
+          'This repeat is already past. Reopen the latest one instead.',
+        ),
+        findsOneWidget,
+      );
+      expect(tester.widget<SwitchListTile>(doneSwitch).value, isTrue);
+      expect(find.byType(TaskEditScreen), findsOneWidget, reason: 'not closed');
+      expect((await repo.getById(a))!.completed, isTrue);
+      await done(tester);
+    });
+
     // Pulled rows come back from the server in UTC. The editor showed (and
     // the pickers started from) the UTC wall time. Only fails on a machine
     // whose time zone isn't UTC, like the emulator in IST it was found on.

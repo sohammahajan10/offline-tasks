@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/sync/connectivity_monitor.dart';
 import '../../domain/task.dart';
 import '../../domain/task_query.dart';
+import '../../domain/task_repository.dart';
+import '../format.dart';
 import '../providers.dart';
 import '../widgets/status_banner.dart';
 import '../widgets/task_tile.dart';
@@ -392,8 +394,7 @@ class _TaskList extends ConsumerWidget {
               key: Key('task-${task.id}'),
               task: task,
               syncState: syncStates[task.id],
-              onToggle: (done) =>
-                  ref.read(taskRepositoryProvider).setCompleted(task.id, done),
+              onToggle: (done) => _setCompleted(context, ref, task, done),
               onTap: () => openTaskEditor(context, taskId: task.id),
               dragHandle: dragHandle,
             ),
@@ -447,6 +448,26 @@ class _TaskList extends ConsumerWidget {
           afterId: to > 0 ? list[to - 1].id : null,
           beforeId: to < list.length - 1 ? list[to + 1].id : null,
         );
+  }
+
+  /// A refused un-complete writes nothing, so the checkbox (driven by the
+  /// stored task) stays ticked; the snackbar says why.
+  Future<void> _setCompleted(
+    BuildContext context,
+    WidgetRef ref,
+    TaskItem task,
+    bool done,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(taskRepositoryProvider).setCompleted(task.id, done);
+    } on RecurrenceHistoryLocked {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text(recurrenceHistoryLockedMessage)),
+        );
+    }
   }
 
   Future<void> _delete(

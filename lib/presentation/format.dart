@@ -38,3 +38,8 @@ IconData priorityIcon(Priority p) => switch (p) {
   Priority.medium => Icons.drag_handle,
   Priority.low => Icons.keyboard_arrow_down,
 };
+
+/// Shown when un-completing an older occurrence of a repeating task is
+/// refused because a later one is open (`RecurrenceHistoryLocked`).
+const recurrenceHistoryLockedMessage =
+    'This repeat is already past. Reopen the latest one instead.';

@@ -13,8 +13,8 @@ on two devices while both were offline are merged field by field.
 
 ## For evaluators
 
-**[⬇ Download APK (v1.0.1)](https://github.com/sohammahajan10/offline-tasks/releases/download/v1.0.1/offline-tasks-v1.0.1.apk)**
-· [Release notes](https://github.com/sohammahajan10/offline-tasks/releases/tag/v1.0.1)
+**[⬇ Download APK (v1.0.2)](https://github.com/sohammahajan10/offline-tasks/releases/download/v1.0.2/offline-tasks-v1.0.2.apk)**
+· [Release notes](https://github.com/sohammahajan10/offline-tasks/releases/tag/v1.0.2)
 
 Demo video: TODO
 
@@ -258,6 +258,15 @@ as it is still exactly as generated. Once it has been edited, moved or
 completed, here or on another device, it stays. The check is on content and
 the id is recomputed, so it also works offline and on a device that pulled the
 occurrence. Completing again revives the same occurrence.
+
+**A series has at most one open occurrence.** Un-completing is refused, and
+nothing is written or queued, if a later occurrence of the same series would
+still be open afterwards. For example: tick A (creates B), tick B (creates C),
+then untick A. C is still open, so the checkbox stays ticked and the app says
+*"This repeat is already past. Reopen the latest one instead."* The same
+applies if B was edited and so isn't withdrawn. Unticking B instead is allowed:
+C is taken back and B is the one open occurrence. The rule is the same from the
+list checkbox and the editor. One-off tasks are not affected.
 
 Due dates advance in UTC, so devices in different time zones compute the same
 id. The trade-off is that across a daylight-saving change the local time

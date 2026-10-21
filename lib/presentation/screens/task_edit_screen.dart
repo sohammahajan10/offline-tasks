@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../domain/recurrence.dart';
 import '../../domain/task.dart';
 import '../../domain/task_query.dart';
+import '../../domain/task_repository.dart';
 import '../format.dart';
 import '../providers.dart';
 import '../widgets/task_tile.dart';
@@ -153,6 +154,16 @@ class _TaskEditScreenState extends ConsumerState<TaskEditScreen> {
       }
       await _askForReminderPermission();
       if (mounted) Navigator.of(context).pop();
+    } on RecurrenceHistoryLocked {
+      if (!mounted) return;
+      // Nothing was saved: tick the box again so the form matches the task.
+      setState(() {
+        _saving = false;
+        _completed = true;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(recurrenceHistoryLockedMessage)),
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);

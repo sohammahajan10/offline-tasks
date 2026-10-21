@@ -745,34 +745,43 @@ void main() {
         }
       });
 
-      test('an occurrence edited on another device is kept', () async {
-        final id = await a.repo.create(
-          title: 'Water plants',
-          dueAt: due,
-          recurrence: Recurrence.weekly,
-        );
-        clock.advance(const Duration(minutes: 1));
-        await a.repo.setCompleted(id, true);
-        await a.sync();
-        await b.sync();
-        final nextId = occurrenceId(id, nextDue);
+      test(
+        'an occurrence edited on another device blocks un-completing',
+        () async {
+          final id = await a.repo.create(
+            title: 'Water plants',
+            dueAt: due,
+            recurrence: Recurrence.weekly,
+          );
+          clock.advance(const Duration(minutes: 1));
+          await a.repo.setCompleted(id, true);
+          await a.sync();
+          await b.sync();
+          final nextId = occurrenceId(id, nextDue);
 
-        clock.advance(const Duration(minutes: 1));
-        await b.repo.update(nextId, const TaskPatch(notes: 'use rainwater'));
-        await b.sync();
-        await a.sync(); // A pulls B's edit...
+          clock.advance(const Duration(minutes: 1));
+          await b.repo.update(nextId, const TaskPatch(notes: 'use rainwater'));
+          await b.sync();
+          await a.sync(); // A pulls B's edit...
 
-        clock.advance(const Duration(minutes: 1));
-        await a.repo.setCompleted(id, false); // ...so A leaves it alone.
-        await a.sync();
-        await b.sync();
+          clock.advance(const Duration(minutes: 1));
+          // ...so it isn't withdrawn, and reopening the first would leave two
+          // open occurrences: refused.
+          await expectLater(
+            a.repo.setCompleted(id, false),
+            throwsA(isA<RecurrenceHistoryLocked>()),
+          );
+          await a.sync();
+          await b.sync();
 
-        expect(server.rows[nextId]!['is_deleted'], isFalse);
-        expect(server.rows[nextId]!['notes'], 'use rainwater');
-        for (final d in [a, b]) {
-          expect(await visible(d), {id, nextId});
-        }
-      });
+          expect(server.rows[id]!['completed'], isTrue);
+          expect(server.rows[nextId]!['is_deleted'], isFalse);
+          expect(server.rows[nextId]!['notes'], 'use rainwater');
+          for (final d in [a, b]) {
+            expect(await visible(d), {id, nextId});
+          }
+        },
+      );
 
       test(
         'completed and un-completed offline: nothing to show after sync',

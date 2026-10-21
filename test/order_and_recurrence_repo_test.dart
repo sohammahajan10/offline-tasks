@@ -32,6 +32,20 @@ void main() {
   Future<TaskRow> row(String id) =>
       (db.select(db.tasks)..where((t) => t.id.equals(id))).getSingle();
 
+  /// [write] is refused with [RecurrenceHistoryLocked] and leaves the tasks
+  /// and the outbox exactly as they were.
+  Future<void> expectUnchangedBy(Future<void> Function() write) async {
+    final tasks = await db.select(db.tasks).get();
+    final queue = await db.select(db.syncQueue).get();
+    await expectLater(write(), throwsA(isA<RecurrenceHistoryLocked>()));
+    expect(await db.select(db.tasks).get(), tasks);
+    expect(
+      await db.select(db.syncQueue).get(),
+      queue,
+      reason: 'no queue entry',
+    );
+  }
+
   group('manual order', () {
     test('new tasks go on top', () async {
       await repo.create(title: 'first');
@@ -198,7 +212,9 @@ void main() {
       ),
       ('completed', (n) => repo.setCompleted(n, true)),
     ]) {
-      test('a next occurrence that was $what stays', () async {
+      // B is no longer exactly as generated, so it isn't withdrawn; reopening
+      // A would leave two open occurrences (B, or C once B was completed).
+      test('a next occurrence that was $what blocks un-completing', () async {
         final id = await repo.create(
           title: 'Water plants',
           dueAt: due,
@@ -207,12 +223,54 @@ void main() {
         await repo.setCompleted(id, true);
         final nextId = occurrenceId(id, DateTime.utc(2026, 10, 27, 8));
         await touch(nextId);
-
-        await repo.setCompleted(id, false);
+        await expectUnchangedBy(() => repo.setCompleted(id, false));
+        expect((await row(id)).completed, isTrue);
         expect((await row(nextId)).isDeleted, isFalse);
-        expect((await row(id)).completed, isFalse);
       });
     }
+
+    group('a series has at most one open occurrence', () {
+      // A (due 20 Oct) → B (27 Oct) → C (3 Nov).
+      late String a, b, c;
+      setUp(() async {
+        a = await repo.create(
+          title: 'Water plants',
+          dueAt: due,
+          recurrence: Recurrence.weekly,
+        );
+        await repo.setCompleted(a, true);
+        b = occurrenceId(a, DateTime.utc(2026, 10, 27, 8));
+        await repo.setCompleted(b, true);
+        c = occurrenceId(a, DateTime.utc(2026, 11, 3, 8));
+      });
+
+      Future<List<String>> open() async => (await repo.watchAll().first)
+          .where((t) => !t.completed)
+          .map((t) => t.id)
+          .toList();
+
+      test('un-completing an old occurrence is refused', () async {
+        await expectUnchangedBy(() => repo.setCompleted(a, false));
+        expect(await open(), [c]);
+      });
+
+      test('the editor gets the same refusal', () async {
+        await expectUnchangedBy(
+          () => repo.update(a, const TaskPatch(completed: false, notes: 'x')),
+        );
+        expect((await row(a)).notes, '', reason: 'nothing else saved either');
+      });
+
+      test(
+        'un-completing the latest completed one withdraws the next',
+        () async {
+          await repo.setCompleted(b, false);
+          expect(await open(), [b], reason: 'exactly one open occurrence');
+          expect((await row(c)).isDeleted, isTrue);
+          expect((await row(a)).completed, isTrue);
+        },
+      );
+    });
 
     test(
       'changing other fields of a completed task leaves the next one',
@@ -246,6 +304,8 @@ void main() {
       final id = await repo.create(title: 'Once', dueAt: due);
       await repo.setCompleted(id, true);
       expect(await db.select(db.tasks).get(), hasLength(1));
+      await repo.setCompleted(id, false);
+      expect((await row(id)).completed, isFalse, reason: 'never refused');
     });
   });
 }

@@ -12,6 +12,16 @@ import 'recurrence.dart';
 import 'task.dart';
 import 'task_query.dart';
 
+/// Thrown when un-completing an occurrence of a repeating task while a later
+/// occurrence of the same series is still open: that would leave two open
+/// copies. Reopen the latest one instead.
+class RecurrenceHistoryLocked implements Exception {
+  const RecurrenceHistoryLocked();
+
+  @override
+  String toString() => 'RecurrenceHistoryLocked: a later occurrence is open';
+}
+
 /// All task writes go through here. Each one updates `tasks` and `sync_queue`
 /// in a single SQLite transaction, so a change can never exist without the
 /// outbox entry that will sync it (and vice versa), even if the app is killed.
@@ -284,6 +294,31 @@ class TaskRepository {
     }
     if (before.completed && !after.completed && before.recurrence != null) {
       await _withdrawNextOccurrence(before);
+      await _ensureNoLaterOpenOccurrence(before);
+    }
+  }
+
+  /// A series has at most one open occurrence: un-completing [done] is
+  /// refused if a later occurrence is still open (after the withdrawal above
+  /// took back the untouched direct next one). Throwing rolls the whole
+  /// transaction back, so nothing is written or queued.
+  Future<void> _ensureNoLaterOpenOccurrence(TaskRow done) async {
+    final due = done.dueAt;
+    if (due == null) return;
+    final seriesId = done.seriesId ?? done.id;
+    // Compared in Dart: due times are stored as text, which may carry
+    // different offsets, so a SQL string comparison could misorder them.
+    final open =
+        await (_db.select(_db.tasks)..where(
+              (t) =>
+                  t.seriesId.equals(seriesId) &
+                  t.id.equals(done.id).not() &
+                  t.isDeleted.equals(false) &
+                  t.completed.equals(false),
+            ))
+            .get();
+    if (open.any((t) => t.dueAt != null && t.dueAt!.isAfter(due))) {
+      throw const RecurrenceHistoryLocked();
     }
   }
 
