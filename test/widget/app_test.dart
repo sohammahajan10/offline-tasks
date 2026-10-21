@@ -180,28 +180,36 @@ void main() {
       await done(tester);
     });
 
-    testWidgets('ticking off a repeating task shows the next one', (
-      tester,
-    ) async {
-      final due = DateTime.now().add(const Duration(days: 1));
-      await repo.create(
-        title: 'Water plants',
-        dueAt: due,
-        recurrence: Recurrence.weekly,
-      );
-      await pump(tester);
-      expect(find.text('Weekly'), findsOneWidget);
+    testWidgets(
+      'ticking a repeating task off shows the next one; unticking removes it',
+      (tester) async {
+        final due = DateTime.now().add(const Duration(days: 1));
+        await repo.create(
+          title: 'Water plants',
+          dueAt: due,
+          recurrence: Recurrence.weekly,
+        );
+        await pump(tester);
+        expect(find.text('Weekly'), findsOneWidget);
 
-      await tester.tap(find.byType(Checkbox));
-      await tester.pumpAndSettle();
-      expect(find.text('Water plants'), findsNWidgets(2));
-      final tasks = await db.select(db.tasks).get();
-      expect(
-        tasks.where((t) => !t.completed).single.dueAt!.toUtc(),
-        Recurrence.weekly.next(due),
-      );
-      await done(tester);
-    });
+        await tester.tap(find.byType(Checkbox));
+        await tester.pumpAndSettle();
+        expect(find.text('Water plants'), findsNWidgets(2));
+        final tasks = await db.select(db.tasks).get();
+        expect(
+          tasks.where((t) => !t.completed).single.dueAt!.toUtc(),
+          Recurrence.weekly.next(due),
+        );
+
+        // Unticking it again takes the generated next one back.
+        await tester.tap(
+          find.byWidgetPredicate((w) => w is Checkbox && w.value == true),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Water plants'), findsOneWidget);
+        await done(tester);
+      },
+    );
 
     testWidgets('manual order: drag a task by its handle', (tester) async {
       final c = await repo.create(title: 'C task');

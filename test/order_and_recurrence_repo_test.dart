@@ -139,7 +139,29 @@ void main() {
       expect(queued, containsAll([id, nextId]));
     });
 
-    test('re-completing the same occurrence does not create another', () async {
+    Future<List<String>> visible() async =>
+        (await repo.watchAll().first).map((t) => t.id).toList();
+
+    test('un-completing takes back the untouched next occurrence', () async {
+      final id = await repo.create(
+        title: 'Water plants',
+        dueAt: due,
+        recurrence: Recurrence.weekly,
+      );
+      await repo.setCompleted(id, true);
+      final nextId = occurrenceId(id, DateTime.utc(2026, 10, 27, 8));
+      expect(await visible(), unorderedEquals([id, nextId]));
+
+      await repo.setCompleted(id, false);
+      expect(await visible(), [id], reason: 'no second copy left behind');
+      expect((await row(nextId)).isDeleted, isTrue, reason: 'a tombstone');
+      final op = (await db.select(db.syncQueue).get()).singleWhere(
+        (q) => q.taskId == nextId,
+      );
+      expect(op.opType, OpType.delete, reason: 'the withdrawal syncs');
+    });
+
+    test('completing again brings the same occurrence back', () async {
       final id = await repo.create(
         title: 'Standup',
         dueAt: due,
@@ -148,8 +170,64 @@ void main() {
       await repo.setCompleted(id, true);
       await repo.setCompleted(id, false);
       await repo.setCompleted(id, true);
-      expect(await db.select(db.tasks).get(), hasLength(2));
+
+      final nextId = occurrenceId(id, DateTime.utc(2026, 10, 21, 8));
+      expect(
+        await db.select(db.tasks).get(),
+        hasLength(2),
+        reason: 'no new id',
+      );
+      expect(await visible(), unorderedEquals([id, nextId]));
+      final next = await row(nextId);
+      expect(next.isDeleted, isFalse);
+      expect(next.completed, isFalse);
     });
+
+    for (final (what, touch) in <(String, Future<void> Function(String))>[
+      ('renamed', (n) => repo.update(n, const TaskPatch(title: 'Mine now'))),
+      (
+        're-prioritised',
+        (n) => repo.update(n, const TaskPatch(priority: Priority.high)),
+      ),
+      (
+        'moved',
+        (n) async {
+          final other = await repo.create(title: 'Other');
+          await repo.move(n, beforeId: other); // above it: a new key
+        },
+      ),
+      ('completed', (n) => repo.setCompleted(n, true)),
+    ]) {
+      test('a next occurrence that was $what stays', () async {
+        final id = await repo.create(
+          title: 'Water plants',
+          dueAt: due,
+          recurrence: Recurrence.weekly,
+        );
+        await repo.setCompleted(id, true);
+        final nextId = occurrenceId(id, DateTime.utc(2026, 10, 27, 8));
+        await touch(nextId);
+
+        await repo.setCompleted(id, false);
+        expect((await row(nextId)).isDeleted, isFalse);
+        expect((await row(id)).completed, isFalse);
+      });
+    }
+
+    test(
+      'changing other fields of a completed task leaves the next one',
+      () async {
+        final id = await repo.create(
+          title: 'Water plants',
+          dueAt: due,
+          recurrence: Recurrence.weekly,
+        );
+        await repo.setCompleted(id, true);
+        await repo.update(id, const TaskPatch(notes: 'used the blue can'));
+        final nextId = occurrenceId(id, DateTime.utc(2026, 10, 27, 8));
+        expect((await row(nextId)).isDeleted, isFalse);
+      },
+    );
 
     test('the chain continues from each occurrence', () async {
       final first = await repo.create(

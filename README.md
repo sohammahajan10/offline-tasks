@@ -13,8 +13,8 @@ on two devices while both were offline are merged field by field.
 
 ## For evaluators
 
-**[⬇ Download APK (v1.0.0)](https://github.com/sohammahajan10/offline-tasks/releases/download/v1.0.0/offline-tasks-v1.0.0.apk)**
-· [Release notes](https://github.com/sohammahajan10/offline-tasks/releases/tag/v1.0.0)
+**[⬇ Download APK (v1.0.1)](https://github.com/sohammahajan10/offline-tasks/releases/download/v1.0.1/offline-tasks-v1.0.1.apk)**
+· [Release notes](https://github.com/sohammahajan10/offline-tasks/releases/tag/v1.0.1)
 
 Demo video: TODO
 
@@ -253,6 +253,12 @@ that complete the same occurrence offline therefore create the same task. The
 second push is a stale create with identical content, which merges to nothing.
 The result is one next task, not two.
 
+Un-completing the task takes that next occurrence back (a tombstone), as long
+as it is still exactly as generated. Once it has been edited, moved or
+completed, here or on another device, it stays. The check is on content and
+the id is recomputed, so it also works offline and on a device that pulled the
+occurrence. Completing again revives the same occurrence.
+
 Due dates advance in UTC, so devices in different time zones compute the same
 id. The trade-off is that across a daylight-saving change the local time
 shifts by an hour.
@@ -312,7 +318,7 @@ shows *"N unsynced changes will be lost"*, with **Cancel** as the default.
 | | Pending-sync badge per task | [task_tile.dart](lib/presentation/widgets/task_tile.dart) |
 | | Loading / empty / error states | [task_list_screen.dart](lib/presentation/screens/task_list_screen.dart) |
 | **Code quality** (10%) | Layering | `data/` (db, api, sync, notifications) → `domain/` → `presentation/` |
-| | Tests | 153 Dart tests (151 offline + 2 live against Supabase), 2 on-device integration tests, 38 SQL checks (below) |
+| | Tests | 162 Dart tests (160 offline + 2 live against Supabase), 2 on-device integration tests, 38 SQL checks (below) |
 
 | Bonus | Status |
 |---|---|

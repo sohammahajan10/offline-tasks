@@ -708,6 +708,99 @@ void main() {
       },
     );
 
+    group('un-completing a repeating task', () {
+      final due = DateTime.utc(2026, 10, 20, 8);
+      final nextDue = DateTime.utc(2026, 10, 27, 8);
+
+      Future<Set<String>> visible(Device d) async =>
+          (await d.repo.watchAll().first).map((t) => t.id).toSet();
+
+      test('on the other device, after the next occurrence synced: withdrawn everywhere', () async {
+        final id = await a.repo.create(
+          title: 'Water plants',
+          dueAt: due,
+          recurrence: Recurrence.weekly,
+        );
+        await a.sync();
+        clock.advance(const Duration(minutes: 1));
+        await a.repo.setCompleted(id, true);
+        await a.sync();
+        await b.sync();
+        final nextId = occurrenceId(id, nextDue);
+        expect(await visible(b), {id, nextId});
+
+        // B, offline, unticks the task A completed.
+        clock.advance(const Duration(minutes: 1));
+        await b.repo.setCompleted(id, false);
+        expect(await visible(b), {id});
+
+        final reportB = await b.sync();
+        await a.sync();
+        expect(reportB.failed, 0);
+        expect(server.rows[nextId]!['is_deleted'], isTrue);
+        expect(server.rows[id]!['completed'], isFalse);
+        for (final d in [a, b]) {
+          expect(await visible(d), {id}, reason: 'one copy on both devices');
+          expect(await d.queue(), isEmpty);
+        }
+      });
+
+      test('an occurrence edited on another device is kept', () async {
+        final id = await a.repo.create(
+          title: 'Water plants',
+          dueAt: due,
+          recurrence: Recurrence.weekly,
+        );
+        clock.advance(const Duration(minutes: 1));
+        await a.repo.setCompleted(id, true);
+        await a.sync();
+        await b.sync();
+        final nextId = occurrenceId(id, nextDue);
+
+        clock.advance(const Duration(minutes: 1));
+        await b.repo.update(nextId, const TaskPatch(notes: 'use rainwater'));
+        await b.sync();
+        await a.sync(); // A pulls B's edit...
+
+        clock.advance(const Duration(minutes: 1));
+        await a.repo.setCompleted(id, false); // ...so A leaves it alone.
+        await a.sync();
+        await b.sync();
+
+        expect(server.rows[nextId]!['is_deleted'], isFalse);
+        expect(server.rows[nextId]!['notes'], 'use rainwater');
+        for (final d in [a, b]) {
+          expect(await visible(d), {id, nextId});
+        }
+      });
+
+      test(
+        'completed and un-completed offline: nothing to show after sync',
+        () async {
+          final id = await a.repo.create(
+            title: 'Water plants',
+            dueAt: due,
+            recurrence: Recurrence.weekly,
+          );
+          await a.sync();
+          await b.sync();
+
+          clock.advance(const Duration(minutes: 1));
+          await a.repo.setCompleted(id, true);
+          await a.repo.setCompleted(id, false);
+          final report = await a.sync();
+          await b.sync();
+
+          expect(report.failed, 0);
+          final nextId = occurrenceId(id, nextDue);
+          expect(server.rows[nextId]?['is_deleted'] ?? true, isTrue);
+          for (final d in [a, b]) {
+            expect(await visible(d), {id});
+          }
+        },
+      );
+    });
+
     test('moves of different tasks on two devices both survive', () async {
       final c = await a.repo.create(title: 'C');
       final bTask = await a.repo.create(title: 'B');

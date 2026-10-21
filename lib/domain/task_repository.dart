@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:collection/collection.dart';
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
@@ -281,6 +282,32 @@ class TaskRepository {
     if (!before.completed && after.completed && after.recurrence != null) {
       await _createNextOccurrence(after);
     }
+    if (before.completed && !after.completed && before.recurrence != null) {
+      await _withdrawNextOccurrence(before);
+    }
+  }
+
+  /// The next occurrence exactly as completing [done] creates it.
+  ({String id, TasksCompanion fields}) _nextOccurrence(TaskRow done) {
+    final rule = Recurrence.parse(done.recurrence)!;
+    final seriesId = done.seriesId ?? done.id;
+    final nextDue = rule.next(done.dueAt!);
+    return (
+      id: occurrenceId(seriesId, nextDue),
+      fields: TasksCompanion(
+        title: Value(done.title),
+        notes: Value(done.notes),
+        priority: Value(done.priority),
+        dueAt: Value(nextDue),
+        category: Value(done.category),
+        tags: Value(done.tags),
+        sortKey: Value(done.sortKey),
+        recurrence: Value(done.recurrence),
+        seriesId: Value(seriesId),
+        completed: const Value(false),
+        isDeleted: const Value(false),
+      ),
+    );
   }
 
   /// Completing a repeating task creates the next one, in the same
@@ -288,33 +315,58 @@ class TaskRepository {
   /// (see [occurrenceId]), so two devices completing the same occurrence
   /// offline create the same task, which sync then merges into one.
   Future<void> _createNextOccurrence(TaskRow done) async {
-    final rule = Recurrence.parse(done.recurrence)!;
-    final seriesId = done.seriesId ?? done.id;
-    final nextDue = rule.next(done.dueAt!);
-    final nextId = occurrenceId(seriesId, nextDue);
-    // Already here: created earlier (completed, reopened, completed again),
-    // or pulled from another device that got there first.
-    if (await _row(nextId) != null) return;
-    await _db
-        .into(_db.tasks)
-        .insert(
-          TasksCompanion.insert(
-            id: nextId,
-            title: done.title,
-            notes: Value(done.notes),
-            priority: Value(done.priority),
-            dueAt: Value(nextDue),
-            category: Value(done.category),
-            tags: Value(done.tags),
-            sortKey: Value(done.sortKey),
-            recurrence: Value(done.recurrence),
-            seriesId: Value(seriesId),
-            updatedAt: _clock(),
-            dirty: const Value(true),
-          ),
-        );
-    await _enqueue(nextId);
+    final next = _nextOccurrence(done);
+    final existing = await _row(next.id);
+    // Already here (pulled from another device that got there first): keep it.
+    if (existing != null && !existing.isDeleted) return;
+    final fields = next.fields.copyWith(
+      updatedAt: Value(_clock()),
+      dirty: const Value(true),
+    );
+    if (existing == null) {
+      await _db.into(_db.tasks).insert(fields.copyWith(id: Value(next.id)));
+    } else {
+      // Withdrawn by an earlier un-complete: completing again brings it back.
+      await (_db.update(
+        _db.tasks,
+      )..where((t) => t.id.equals(next.id))).write(fields);
+    }
+    await _enqueue(next.id);
   }
+
+  /// Un-completing a repeating task takes back the occurrence that completing
+  /// it created, so the list doesn't show two copies. Only if that occurrence
+  /// is still exactly as generated: once it was edited, moved or completed
+  /// (here, or on another device and pulled), it is the user's and stays.
+  ///
+  /// Works offline and on another device that already pulled the occurrence:
+  /// the id is recomputed from the series and due date, and the check is on
+  /// content, not on which device created it. The tombstone syncs like any
+  /// delete.
+  Future<void> _withdrawNextOccurrence(TaskRow done) async {
+    if (done.dueAt == null) return;
+    final next = _nextOccurrence(done);
+    final existing = await _row(next.id);
+    if (existing == null || !_isUntouched(existing, next.fields)) return;
+    await _apply(next.id, const TasksCompanion(isDeleted: Value(true)));
+  }
+
+  static bool _isUntouched(TaskRow row, TasksCompanion generated) =>
+      row.title == generated.title.value &&
+      row.notes == generated.notes.value &&
+      row.priority == generated.priority.value &&
+      row.dueAt != null &&
+      row.dueAt!.isAtSameMomentAs(generated.dueAt.value!) &&
+      row.category == generated.category.value &&
+      const ListEquality<String>().equals(
+        decodeTags(row.tags),
+        decodeTags(generated.tags.value),
+      ) &&
+      row.sortKey == generated.sortKey.value &&
+      row.recurrence == generated.recurrence.value &&
+      row.seriesId == generated.seriesId.value &&
+      !row.completed &&
+      !row.isDeleted;
 
   Future<TaskRow?> _row(String id) =>
       (_db.select(_db.tasks)..where((t) => t.id.equals(id))).getSingleOrNull();
