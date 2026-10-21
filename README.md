@@ -16,7 +16,7 @@ on two devices while both were offline are merged field by field.
 **[⬇ Download APK (v1.0.2)](https://github.com/sohammahajan10/offline-tasks/releases/download/v1.0.2/offline-tasks-v1.0.2.apk)**
 · [Release notes](https://github.com/sohammahajan10/offline-tasks/releases/tag/v1.0.2)
 
-Demo video: TODO
+Demo video: https://youtu.be/bRiI7J1uAps
 
 ### Demo account
 
